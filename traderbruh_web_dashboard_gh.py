@@ -1,14 +1,5 @@
-# -*- coding: utf-8 -*-
-"""
-TraderBruh — FULL Web Dashboard (News/Announcements + DT Breakout Auto-BUY)
-- TA signals (BUY/DCA/WATCH/AVOID) with commentary
-- Patterns: Double Top/Bottom, H&S/Inverse, Triangles, Bull Flag
-- "Breakout Ready" for Double-Top invalidation + auto-upgrade Signal to BUY
-- ATR(14) based initial stop hint on breakout
-- Auto-DCA gate (gap crash → reaction/reclaim)
-- Mini-candles, 90d sparks, KPI tiles
-- News/Announcements: parse local ASX PDFs (Appendix 3Y/2A, Price Query, etc.)
-"""
+# traderbruh_web_dashboard_gh.py
+# TraderBruh — Web Dashboard for GitHub Pages (ASX TA)
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -18,6 +9,7 @@ import yfinance as yf
 import plotly.graph_objects as go
 import plotly.io as pio
 import zoneinfo
+
 try:
     from pypdf import PdfReader
     HAVE_PYPDF = True
@@ -30,16 +22,15 @@ FETCH_DAYS          = 900       # history window for OHLC
 MINI_BARS           = 120       # mini-candle bars
 SPARK_DAYS          = 90        # sparkline bars
 
-OUTPUT_DIR          = 'docs'
-OUTPUT_HTML         = os.path.join(OUTPUT_DIR, 'index.html')
+OUTPUT_DIR          = "docs"    # GitHub Pages artifact root
+OUTPUT_HTML         = os.path.join(OUTPUT_DIR, "index.html")
+
 ANN_DIR             = 'announcements'     # drop ASX PDFs here
 NEWS_WINDOW_DAYS    = 14
 PATTERN_LOOKBACK    = 180
 PIVOT_WINDOW        = 4
 PRICE_TOL           = 0.03
 PATTERNS_CONFIRMED_ONLY = True  # Patterns tab shows only confirmed patterns
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 RULES = {
     'buy':     {'rsi_min': 45, 'rsi_max': 70},
@@ -48,13 +39,13 @@ RULES = {
     'autodca': {'gap_thresh': -2.0, 'fill_req': 50.0}  # gap <=-2% and ≥50% fill & above EMA21 & reclaim mid
 }
 
-# Breakout (DT invalidation) rules  ⭐ NEW
+# Breakout (DT invalidation) rules
 BREAKOUT_RULES = {
     'atr_mult':   0.50,   # must clear DT ceiling by ≥ 0.5×ATR(14)
     'vol_mult':   1.30,   # volume ≥ 1.3×Vol20
     'buffer_pct': 0.003,  # and ≥ 0.30% above ceiling
 }
-# Auto-upgrade Signal when DT breakout is ready  ⭐ NEW
+# Auto-upgrade Signal when DT breakout is ready
 AUTO_UPGRADE_BREAKOUT = True
 
 COMPANY_META = {
@@ -93,37 +84,29 @@ UNIVERSE = [(t, f'{t}.AX') for t in COMPANY_META.keys()]
 
 # ---------------- Data & TA ----------------
 def fetch(symbol: str) -> pd.DataFrame:
-    df = yf.download(symbol, period=f'{FETCH_DAYS}d', interval='1d',
-                     auto_adjust=False, progress=False, group_by='column', prepost=False)
+    df = yf.download(
+        symbol,
+        period=f'{FETCH_DAYS}d',
+        interval='1d',
+        auto_adjust=False,
+        progress=False,
+        group_by='column',
+        prepost=False
+    )
     if df is None or df.empty:
-        return pd.DataFrame(columns=['Date','Open','High','Low','Close','Volume'])
+        return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+
     if isinstance(df.columns, pd.MultiIndex):
-        try: df = df.xs(symbol, axis=1, level=-1, drop_level=True)
-        except Exception: df.columns = df.columns.get_level_values(0)
-    df = df[['Open','High','Low','Close','Volume']].reset_index()
+        try:
+            df = df.xs(symbol, axis=1, level=-1, drop_level=True)
+        except Exception:
+            df.columns = df.columns.get_level_values(0)
+
+    df = df[['Open', 'High', 'Low', 'Close', 'Volume']].reset_index()
     date_col = 'Date' if 'Date' in df.columns else df.columns[0]
     df['Date'] = pd.to_datetime(df[date_col], utc=True).dt.tz_convert(SYD).dt.tz_localize(None)
 
-    # If after ~4:20pm and daily hasn't printed for today yet, stitch last hour bar
-    now_syd = datetime.now(SYD)
-    if now_syd.time() >= time(16,20) and (df['Date'].max().date() < now_syd.date()):
-        intr = yf.download(symbol, period='5d', interval='60m',
-                           auto_adjust=False, progress=False, prepost=False, group_by='column')
-        if intr is not None and not intr.empty:
-            if isinstance(intr.columns, pd.MultiIndex):
-                try: intr = intr.xs(symbol, axis=1, level=-1, drop_level=True)
-                except Exception: intr.columns = intr.columns.get_level_values(0)
-            intr = intr.reset_index()
-            intr['Date'] = pd.to_datetime(intr[intr.columns[0]], utc=True).dt.tz_convert(SYD)
-            last = intr.tail(1).iloc[0]
-            top = pd.DataFrame([{
-                'Date': last['Date'].date(),
-                'Open': float(last['Open']), 'High': float(last['High']),
-                'Low': float(last['Low']), 'Close': float(last['Close']),
-                'Volume': float(last['Volume'])
-            }])
-            df = pd.concat([df, top], ignore_index=True)
-    return df.dropna(subset=['Close'])
+     if now_syd.time
 
 def indicators(df: pd.DataFrame) -> pd.DataFrame:
     x = df.copy().sort_values('Date').reset_index(drop=True)
@@ -134,19 +117,22 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     x['High20'] = x['High'].rolling(20).max()
     x['High52W']= x['High'].rolling(252).max()
     x['Vol20']  = x['Volume'].rolling(20).mean()
+
     # RSI14
     chg = x['Close'].diff()
     gains = chg.clip(lower=0).rolling(14).mean()
     losses = (-chg).clip(lower=0).rolling(14).mean()
     RS = gains / losses
-    x['RSI14'] = 100 - (100/(1+RS))
-    x['Dist_to_52W_High_%'] = (x['Close']/x['High52W'] - 1)*100.0
-    x['Dist_to_SMA200_%']   = (x['Close']/x['SMA200']  - 1)*100.0
-    # ATR(14)  ⭐ NEW
+    x['RSI14'] = 100 - (100 / (1 + RS))
+
+    x['Dist_to_52W_High_%'] = (x['Close'] / x['High52W'] - 1) * 100.0
+    x['Dist_to_SMA200_%']   = (x['Close'] / x['SMA200']  - 1) * 100.0
+
+    # ATR(14)
     x['H-L']  = x['High'] - x['Low']
     x['H-C']  = (x['High'] - x['Close'].shift(1)).abs()
     x['L-C']  = (x['Low']  - x['Close'].shift(1)).abs()
-    x['TR']   = x[['H-L','H-C','L-C']].max(axis=1)
+    x['TR']   = x[['H-L', 'H-C', 'L-C']].max(axis=1)
     x['ATR14']= x['TR'].rolling(14).mean()
     return x
 
@@ -160,20 +146,24 @@ def label_row(r: pd.Series) -> str:
     dca_ok = (
         (r['Close'] >= r['SMA200']) and
         (r['RSI14'] < RULES['dca']['rsi_max']) and
-        (r['Close'] <= r['SMA200']*(1 + RULES['dca']['sma200_proximity']))
+        (r['Close'] <= r['SMA200'] * (1 + RULES['dca']['sma200_proximity']))
     )
     avoid = (r['SMA50'] < r['SMA200']) if RULES['avoid']['death_cross'] else False
-    if buy_ok:   return 'BUY'
-    if dca_ok:   return 'DCA'
-    if avoid:    return 'AVOID'
+    if buy_ok:
+        return 'BUY'
+    if dca_ok:
+        return 'DCA'
+    if avoid:
+        return 'AVOID'
     return 'WATCH'
 
 def auto_dca_gate(ind: pd.DataFrame):
-    if len(ind) < 3: return False, {'reason':'insufficient data'}
+    if len(ind) < 3:
+        return False, {'reason': 'insufficient data'}
     D0, D1, D2 = ind.iloc[-1], ind.iloc[-2], ind.iloc[-3]
     gap_pct = (D1['Open'] / D2['Close'] - 1) * 100.0
     if not np.isfinite(gap_pct) or gap_pct > RULES['autodca']['gap_thresh']:
-        return False, {'reason':'no qualifying gap', 'gap_pct': float(gap_pct)}
+        return False, {'reason': 'no qualifying gap', 'gap_pct': float(gap_pct)}
     gap_mid = (D1['High'] + D1['Low']) / 2.0
     reclaim_mid = bool(D0['Close'] > gap_mid)
     above_ema21 = bool(D0['Close'] > D0['EMA21'])
@@ -181,142 +171,242 @@ def auto_dca_gate(ind: pd.DataFrame):
     fill_pct = float(0.0 if gap_size == 0 else (D0['Close'] - D1['Open']) / gap_size * 100.0)
     filled50 = bool(fill_pct >= RULES['autodca']['fill_req'])
     flag = reclaim_mid and above_ema21 and filled50
-    return flag, {'gap_pct': float(gap_pct), 'reclaim_mid': reclaim_mid,
-                  'above_ema21': above_ema21, 'gap_fill_%': fill_pct}
+    return flag, {
+        'gap_pct': float(gap_pct),
+        'reclaim_mid': reclaim_mid,
+        'above_ema21': above_ema21,
+        'gap_fill_%': fill_pct
+    }
 
 # -------- Patterns --------
 def _pivots(ind, window=PIVOT_WINDOW):
     v = ind.tail(PATTERN_LOOKBACK).reset_index(drop=True).copy()
-    ph = (v['High'] == v['High'].rolling(window*2+1, center=True).max())
-    pl = (v['Low']  == v['Low'].rolling(window*2+1, center=True).min())
-    v['PH'] = ph.fillna(False); v['PL'] = pl.fillna(False)
+    ph = (v['High'] == v['High'].rolling(window * 2 + 1, center=True).max())
+    pl = (v['Low']  == v['Low'].rolling(window * 2 + 1, center=True).min())
+    v['PH'] = ph.fillna(False)
+    v['PL'] = pl.fillna(False)
     return v
 
-def _similar(a,b,tol=PRICE_TOL):
-    m = (a+b)/2.0
-    return (abs(a-b)/m) <= tol
+def _similar(a, b, tol=PRICE_TOL):
+    m = (a + b) / 2.0
+    return (abs(a - b) / m) <= tol
 
 def detect_double_bottom(ind):
-    v = _pivots(ind); lows = v.index[v['PL']].tolist(); out=[]
+    v = _pivots(ind)
+    lows = v.index[v['PL']].tolist()
+    out = []
     for i in range(len(lows)):
-        for j in range(i+1, len(lows)):
+        for j in range(i + 1, len(lows)):
             li, lj = lows[i], lows[j]
-            if lj - li < 10: continue
-            p1, p2 = float(v.loc[li,'Low']), float(v.loc[lj,'Low'])
-            if not _similar(p1,p2): continue
-            neck = float(v.loc[li:lj,'High'].max())
+            if lj - li < 10:
+                continue
+            p1, p2 = float(v.loc[li, 'Low']), float(v.loc[lj, 'Low'])
+            if not _similar(p1, p2):
+                continue
+            neck = float(v.loc[li:lj, 'High'].max())
             confirmed = bool(v['Close'].iloc[-1] > neck)
             conf = 0.6 + (0.2 if confirmed else 0.0)
-            if np.isfinite(v['Vol20'].iloc[-1]) and confirmed and v['Volume'].iloc[-1] > 1.2*v['Vol20'].iloc[-1]:
+            if np.isfinite(v['Vol20'].iloc[-1]) and confirmed and v['Volume'].iloc[-1] > 1.2 * v['Vol20'].iloc[-1]:
                 conf += 0.2
-            lines=[('h', v.loc[li,'Date'], v.loc[lj,'Date'], (p1+p2)/2.0), ('h', v.loc[li,'Date'], v['Date'].iloc[-1], neck)]
-            out.append({'name':'Double Bottom','status': 'confirmed' if confirmed else 'forming','confidence': round(min(conf,1.0),2),'levels':{'base':round((p1+p2)/2.0,4),'neckline':round(neck,4)},'lines':lines}); return out
+            lines = [
+                ('h', v.loc[li, 'Date'], v.loc[lj, 'Date'], (p1 + p2) / 2.0),
+                ('h', v.loc[li, 'Date'], v['Date'].iloc[-1], neck)
+            ]
+            out.append({
+                'name': 'Double Bottom',
+                'status': 'confirmed' if confirmed else 'forming',
+                'confidence': round(min(conf, 1.0), 2),
+                'levels': {
+                    'base': round((p1 + p2) / 2.0, 4),
+                    'neckline': round(neck, 4)
+                },
+                'lines': lines
+            })
+            return out
     return out
 
 def detect_double_top(ind):
-    v = _pivots(ind); highs = v.index[v['PH']].tolist(); out=[]
+    v = _pivots(ind)
+    highs = v.index[v['PH']].tolist()
+    out = []
     for i in range(len(highs)):
-        for j in range(i+1, len(highs)):
+        for j in range(i + 1, len(highs)):
             hi, hj = highs[i], highs[j]
-            if hj - hi < 10: continue
-            p1, p2 = float(v.loc[hi,'High']), float(v.loc[hj,'High'])
-            if not _similar(p1,p2): continue
-            neck = float(v.loc[hi:hj,'Low'].min())
+            if hj - hi < 10:
+                continue
+            p1, p2 = float(v.loc[hi, 'High']), float(v.loc[hj, 'High'])
+            if not _similar(p1, p2):
+                continue
+            neck = float(v.loc[hi:hj, 'Low'].min())
             confirmed = bool(v['Close'].iloc[-1] < neck)
             conf = 0.6 + (0.2 if confirmed else 0.0)
-            if np.isfinite(v['Vol20'].iloc[-1]) and confirmed and v['Volume'].iloc[-1] > 1.2*v['Vol20'].iloc[-1]:
+            if np.isfinite(v['Vol20'].iloc[-1]) and confirmed and v['Volume'].iloc[-1] > 1.2 * v['Vol20'].iloc[-1]:
                 conf += 0.2
-            lines=[('h', v.loc[hi,'Date'], v.loc[hj,'Date'], (p1+p2)/2.0), ('h', v.loc[hi,'Date'], v['Date'].iloc[-1], neck)]
-            out.append({'name':'Double Top','status':'confirmed' if confirmed else 'forming','confidence': round(min(conf,1.0),2),'levels':{'ceiling':round((p1+p2)/2.0,4),'neckline':round(neck,4)},'lines':lines}); return out
+            lines = [
+                ('h', v.loc[hi, 'Date'], v.loc[hj, 'Date'], (p1 + p2) / 2.0),
+                ('h', v.loc[hi, 'Date'], v['Date'].iloc[-1], neck)
+            ]
+            out.append({
+                'name': 'Double Top',
+                'status': 'confirmed' if confirmed else 'forming',
+                'confidence': round(min(conf, 1.0), 2),
+                'levels': {
+                    'ceiling': round((p1 + p2) / 2.0, 4),
+                    'neckline': round(neck, 4)
+                },
+                'lines': lines
+            })
+            return out
     return out
 
 def detect_inverse_hs(ind):
-    v=_pivots(ind); lows=v.index[v['PL']].tolist(); out=[]
-    for i in range(len(lows)-2):
-        l1,h,l2 = lows[i], lows[i+1], lows[i+2]
-        pL1,pH,pL2 = float(v.loc[l1,'Low']), float(v.loc[h,'Low']), float(v.loc[l2,'Low'])
-        if not (pH < pL1*(1-0.04) and pH < pL2*(1-0.04)): continue
-        if not _similar(pL1,pL2): continue
+    v = _pivots(ind)
+    lows = v.index[v['PL']].tolist()
+    out = []
+    for i in range(len(lows) - 2):
+        l1, h, l2 = lows[i], lows[i + 1], lows[i + 2]
+        pL1, pH, pL2 = float(v.loc[l1, 'Low']), float(v.loc[h, 'Low']), float(v.loc[l2, 'Low'])
+        if not (pH < pL1 * (1 - 0.04) and pH < pL2 * (1 - 0.04)):
+            continue
+        if not _similar(pL1, pL2):
+            continue
         left_high  = float(v.loc[l1:h, 'High'].max())
         right_high = float(v.loc[h:l2, 'High'].max())
         confirmed = bool(v['Close'].iloc[-1] > min(left_high, right_high))
         conf = 0.6 + (0.2 if confirmed else 0.0)
-        if np.isfinite(v['Vol20'].iloc[-1]) and confirmed and v['Volume'].iloc[-1] > 1.2*v['Vol20'].iloc[-1]:
+        if np.isfinite(v['Vol20'].iloc[-1]) and confirmed and v['Volume'].iloc[-1] > 1.2 * v['Vol20'].iloc[-1]:
             conf += 0.2
-        lines=[('seg', v.loc[l1,'Date'], left_high, v.loc[l2,'Date'], right_high)]
-        out.append({'name':'Inverse H&S','status':'confirmed' if confirmed else 'forming','confidence': round(min(conf,1.0),2),'levels':{'neck_left':round(left_high,4),'neck_right':round(right_high,4)},'lines':lines}); return out
+        lines = [('seg', v.loc[l1, 'Date'], left_high, v.loc[l2, 'Date'], right_high)]
+        out.append({
+            'name': 'Inverse H&S',
+            'status': 'confirmed' if confirmed else 'forming',
+            'confidence': round(min(conf, 1.0), 2),
+            'levels': {
+                'neck_left': round(left_high, 4),
+                'neck_right': round(right_high, 4)
+            },
+            'lines': lines
+        })
+        return out
     return out
 
 def detect_hs(ind):
-    v=_pivots(ind); highs=v.index[v['PH']].tolist(); out=[]
-    for i in range(len(highs)-2):
-        l1,h,l2 = highs[i], highs[i+1], highs[i+2]
-        pL1,pH,pL2 = float(v.loc[l1,'High']), float(v.loc[h,'High']), float(v.loc[l2,'High'])
-        if not (pH > pL1*(1+0.04) and pH > pL2*(1+0.04)): continue
-        if not _similar(pL1,pL2): continue
+    v = _pivots(ind)
+    highs = v.index[v['PH']].tolist()
+    out = []
+    for i in range(len(highs) - 2):
+        l1, h, l2 = highs[i], highs[i + 1], highs[i + 2]
+        pL1, pH, pL2 = float(v.loc[l1, 'High']), float(v.loc[h, 'High']), float(v.loc[l2, 'High'])
+        if not (pH > pL1 * (1 + 0.04) and pH > pL2 * (1 + 0.04)):
+            continue
+        if not _similar(pL1, pL2):
+            continue
         left_low  = float(v.loc[l1:h, 'Low'].min())
         right_low = float(v.loc[h:l2, 'Low'].min())
         confirmed = bool(v['Close'].iloc[-1] < max(left_low, right_low))
         conf = 0.6 + (0.2 if confirmed else 0.0)
-        if np.isfinite(v['Vol20'].iloc[-1]) and confirmed and v['Volume'].iloc[-1] > 1.2*v['Vol20'].iloc[-1]:
+        if np.isfinite(v['Vol20'].iloc[-1]) and confirmed and v['Volume'].iloc[-1] > 1.2 * v['Vol20'].iloc[-1]:
             conf += 0.2
-        lines=[('seg', v.loc[l1,'Date'], left_low, v.loc[l2,'Date'], right_low)]
-        out.append({'name':'Head & Shoulders','status':'confirmed' if confirmed else 'forming','confidence': round(min(conf,1.0),2),'levels':{'neck_left':round(left_low,4),'neck_right':round(right_low,4)},'lines':lines}); return out
+        lines = [('seg', v.loc[l1, 'Date'], left_low, v.loc[l2, 'Date'], right_low)]
+        out.append({
+            'name': 'Head & Shoulders',
+            'status': 'confirmed' if confirmed else 'forming',
+            'confidence': round(min(conf, 1.0), 2),
+            'levels': {
+                'neck_left': round(left_low, 4),
+                'neck_right': round(right_low, 4)
+            },
+            'lines': lines
+        })
+        return out
     return out
 
 def detect_triangles(ind):
-    v=_pivots(ind); tail=v.tail(120).copy(); phs=tail[tail['PH']]; pls=tail[tail['PL']]; out=[]
-    if len(phs)>=2 and len(pls)>=2:
+    v = _pivots(ind)
+    tail = v.tail(120).copy()
+    phs = tail[tail['PH']]
+    pls = tail[tail['PL']]
+    out = []
+    if len(phs) >= 2 and len(pls) >= 2:
         # Ascending: flat-ish highs, rising lows
-        ph_vals=phs['High'].values
-        for i in range(len(ph_vals)-1):
-            if _similar(ph_vals[i], ph_vals[i+1]):
-                res=(ph_vals[i]+ph_vals[i+1])/2.0
-                x=np.arange(len(pls)); slope=np.polyfit(x, pls['Low'].values,1)[0]
-                if slope>0:
-                    confirmed=bool(tail['Close'].iloc[-1] > res)
-                    conf=0.55+(0.25 if confirmed else 0.0)
-                    lines=[('h', pls['Date'].iloc[0], tail['Date'].iloc[-1], res),
-                           ('seg', pls['Date'].iloc[0], pls['Low'].iloc[0], pls['Date'].iloc[-1], pls['Low'].iloc[-1])]
-                    out.append({'name':'Ascending Triangle','status':'confirmed' if confirmed else 'forming','confidence': round(min(conf,1.0),2),'levels':{'resistance':round(res,4)},'lines':lines}); break
+        ph_vals = phs['High'].values
+        for i in range(len(ph_vals) - 1):
+            if _similar(ph_vals[i], ph_vals[i + 1]):
+                res = (ph_vals[i] + ph_vals[i + 1]) / 2.0
+                x = np.arange(len(pls))
+                slope = np.polyfit(x, pls['Low'].values, 1)[0]
+                if slope > 0:
+                    confirmed = bool(tail['Close'].iloc[-1] > res)
+                    conf = 0.55 + (0.25 if confirmed else 0.0)
+                    lines = [
+                        ('h', pls['Date'].iloc[0], tail['Date'].iloc[-1], res),
+                        ('seg', pls['Date'].iloc[0], pls['Low'].iloc[0], pls['Date'].iloc[-1], pls['Low'].iloc[-1])
+                    ]
+                    out.append({
+                        'name': 'Ascending Triangle',
+                        'status': 'confirmed' if confirmed else 'forming',
+                        'confidence': round(min(conf, 1.0), 2),
+                        'levels': {'resistance': round(res, 4)},
+                        'lines': lines
+                    })
+                    break
         # Descending: flat-ish lows, falling highs
-        pl_vals=pls['Low'].values
-        for i in range(len(pl_vals)-1):
-            if _similar(pl_vals[i], pl_vals[i+1]):
-                sup=(pl_vals[i]+pl_vals[i+1])/2.0
-                x=np.arange(len(phs)); slope=np.polyfit(x, phs['High'].values,1)[0]
-                if slope<0:
-                    confirmed=bool(tail['Close'].iloc[-1] < sup)
-                    conf=0.55+(0.25 if confirmed else 0.0)
-                    lines=[('h', phs['Date'].iloc[0], tail['Date'].iloc[-1], sup),
-                           ('seg', phs['Date'].iloc[0], phs['High'].iloc[0], phs['Date'].iloc[-1], phs['High'].iloc[-1])]
-                    out.append({'name':'Descending Triangle','status':'confirmed' if confirmed else 'forming','confidence': round(min(conf,1.0),2),'levels':{'support':round(sup,4)},'lines':lines}); break
+        pl_vals = pls['Low'].values
+        for i in range(len(pl_vals) - 1):
+            if _similar(pl_vals[i], pl_vals[i + 1]):
+                sup = (pl_vals[i] + pl_vals[i + 1]) / 2.0
+                x = np.arange(len(phs))
+                slope = np.polyfit(x, phs['High'].values, 1)[0]
+                if slope < 0:
+                    confirmed = bool(tail['Close'].iloc[-1] < sup)
+                    conf = 0.55 + (0.25 if confirmed else 0.0)
+                    lines = [
+                        ('h', phs['Date'].iloc[0], tail['Date'].iloc[-1], sup),
+                        ('seg', phs['Date'].iloc[0], phs['High'].iloc[0], phs['Date'].iloc[-1], phs['High'].iloc[-1])
+                    ]
+                    out.append({
+                        'name': 'Descending Triangle',
+                        'status': 'confirmed' if confirmed else 'forming',
+                        'confidence': round(min(conf, 1.0), 2),
+                        'levels': {'support': round(sup, 4)},
+                        'lines': lines
+                    })
+                    break
     return out
 
 def detect_flag(ind):
-    if len(ind) < 60: return False, {}
+    if len(ind) < 60:
+        return False, {}
     look = ind.tail(40)
-    impulse = (look['Close'].max()/look['Close'].min()-1)*100
-    if not np.isfinite(impulse) or impulse < 12: return False, {}
-    win=14; tail=ind.tail(max(win,8)).copy(); x=np.arange(len(tail))
-    hi=np.polyfit(x, tail['High'].values,1); lo=np.polyfit(x, tail['Low'].values,1)
-    slope_pct = (hi[0]/tail['Close'].iloc[-1])*100
+    impulse = (look['Close'].max() / look['Close'].min() - 1) * 100
+    if not np.isfinite(impulse) or impulse < 12:
+        return False, {}
+    win = 14
+    tail = ind.tail(max(win, 8)).copy()
+    x = np.arange(len(tail))
+    hi = np.polyfit(x, tail['High'].values, 1)
+    lo = np.polyfit(x, tail['Low'].values, 1)
+    slope_pct = (hi[0] / tail['Close'].iloc[-1]) * 100
     ch = (np.polyval(hi, x[-1]) - np.polyval(lo, x[-1]))
-    tight = ch <= max(0.4*(look['Close'].max()-look['Close'].min()), 0.02*tail['Close'].iloc[-1])
+    tight = ch <= max(0.4 * (look['Close'].max() - look['Close'].min()), 0.02 * tail['Close'].iloc[-1])
     gentle = (-0.006 <= slope_pct <= 0.002)
     return (tight and gentle), {'hi': hi.tolist(), 'lo': lo.tolist(), 'win': win}
 
 def pattern_bias(name: str) -> str:
-    if name in ("Double Bottom","Inverse H&S","Ascending Triangle","Bull Flag"): return "bullish"
-    if name in ("Double Top","Head & Shoulders","Descending Triangle"): return "bearish"
+    if name in ("Double Bottom", "Inverse H&S", "Ascending Triangle", "Bull Flag"):
+        return "bullish"
+    if name in ("Double Top", "Head & Shoulders", "Descending Triangle"):
+        return "bearish"
     return "neutral"
 
 def signal_bias(sig: str) -> str:
-    if sig in ("BUY","DCA"): return "bullish"
-    if sig == "AVOID": return "bearish"
+    if sig in ("BUY", "DCA"):
+        return "bullish"
+    if sig == "AVOID":
+        return "bearish"
     return "neutral"
 
-# ---- DT Breakout Ready (invalidation)  ⭐ NEW
+# ---- DT Breakout Ready (invalidation)
 def breakout_ready_dt(ind: pd.DataFrame, pat: dict, rules: dict):
     """Return (flag, info) if last close invalidates a Double Top by breaking the ceiling with volume."""
     if not pat or pat.get('name') != 'Double Top':
@@ -332,14 +422,19 @@ def breakout_ready_dt(ind: pd.DataFrame, pat: dict, rules: dict):
     ok_price = (close >= ceiling * (1.0 + rules['buffer_pct'])) and (close >= ceiling + rules['atr_mult'] * atr)
     ok_vol   = (vol20 > 0) and (vol >= rules['vol_mult'] * vol20)
     ready = bool(ok_price and ok_vol)
-    return ready, {'ceiling': round(ceiling,4), 'atr': round(atr,4), 'stop': round(close - atr,4)}
+    return ready, {
+        'ceiling': round(ceiling, 4),
+        'atr': round(atr, 4),
+        'stop': round(close - atr, 4)
+    }
 
 # ---------------- Mini-charts ----------------
 def _expand_lines(lines):
-    out=[]
-    if not lines: return out
+    out = []
+    if not lines:
+        return out
     for ln in lines:
-        if ln[0]=='h':
+        if ln[0] == 'h':
             _, d_left, d_right, y = ln
             out.append(('h', d_left, y, d_right, y))
         else:
@@ -348,35 +443,76 @@ def _expand_lines(lines):
     return out
 
 def mini_candle(ind, flag_info=None, pattern_lines=None):
-    v=ind.tail(MINI_BARS).copy()
+    v = ind.tail(MINI_BARS).copy()
     fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=v['Date'], open=v['Open'], high=v['High'], low=v['Low'], close=v['Close'],
-                                 hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Candlestick(
+        x=v['Date'],
+        open=v['Open'],
+        high=v['High'],
+        low=v['Low'],
+        close=v['Close'],
+        hoverinfo='skip',
+        showlegend=False
+    ))
     if 'SMA20' in v.columns:
-        fig.add_trace(go.Scatter(x=v['Date'], y=v['SMA20'], mode='lines',
-                                 line=dict(width=1.4, color='rgba(56,189,248,0.9)'),
-                                 hoverinfo='skip', showlegend=False))
+        fig.add_trace(go.Scatter(
+            x=v['Date'],
+            y=v['SMA20'],
+            mode='lines',
+            line=dict(width=1.4, color='rgba(56,189,248,0.9)'),
+            hoverinfo='skip',
+            showlegend=False
+        ))
     if flag_info:
-        win=flag_info.get('win',14); t2=ind.tail(max(win,8)).copy(); x=np.arange(len(t2))
-        hi=np.poly1d(flag_info['hi']); lo=np.poly1d(flag_info['lo'])
-        fig.add_trace(go.Scatter(x=t2['Date'], y=hi(x), mode='lines',
-                                 line=dict(width=2, dash='dash', color='rgba(167,139,250,0.95)'),
-                                 hoverinfo='skip', showlegend=False))
-        fig.add_trace(go.Scatter(x=t2['Date'], y=lo(x), mode='lines',
-                                 line=dict(width=2, dash='dash', color='rgba(167,139,250,0.95)'),
-                                 hoverinfo='skip', showlegend=False))
+        win = flag_info.get('win', 14)
+        t2 = ind.tail(max(win, 8)).copy()
+        x = np.arange(len(t2))
+        hi = np.poly1d(flag_info['hi'])
+        lo = np.poly1d(flag_info['lo'])
+        fig.add_trace(go.Scatter(
+            x=t2['Date'],
+            y=hi(x),
+            mode='lines',
+            line=dict(width=2, dash='dash', color='rgba(167,139,250,0.95)'),
+            hoverinfo='skip',
+            showlegend=False
+        ))
+        fig.add_trace(go.Scatter(
+            x=t2['Date'],
+            y=lo(x),
+            mode='lines',
+            line=dict(width=2, dash='dash', color='rgba(167,139,250,0.95)'),
+            hoverinfo='skip',
+            showlegend=False
+        ))
     if pattern_lines:
         for (kind, x1, y1, x2, y2) in _expand_lines(pattern_lines):
-            if kind=='h':
-                fig.add_trace(go.Scatter(x=[x1,x2], y=[y1,y1], mode='lines',
-                                         line=dict(width=2, color='rgba(34,197,94,0.95)', dash='dot'),
-                                         hoverinfo='skip', showlegend=False))
+            if kind == 'h':
+                fig.add_trace(go.Scatter(
+                    x=[x1, x2],
+                    y=[y1, y1],
+                    mode='lines',
+                    line=dict(width=2, color='rgba(34,197,94,0.95)', dash='dot'),
+                    hoverinfo='skip',
+                    showlegend=False
+                ))
             else:
-                fig.add_trace(go.Scatter(x=[x1,x2], y=[y1,y2], mode='lines',
-                                         line=dict(width=2, color='rgba(234,179,8,0.95)'),
-                                         hoverinfo='skip', showlegend=False))
-    fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=140, width=320,
-                      xaxis=dict(visible=False), yaxis=dict(visible=False), showlegend=False)
+                fig.add_trace(go.Scatter(
+                    x=[x1, x2],
+                    y=[y1, y2],
+                    mode='lines',
+                    line=dict(width=2, color='rgba(234,179,8,0.95)'),
+                    hoverinfo='skip',
+                    showlegend=False
+                ))
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=140,
+        width=260,  # slightly narrower for mobile
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        showlegend=False
+    )
     return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={'displayModeBar': False})
 
 # ---------------- News/Announcements (local PDFs) ----------------
@@ -392,16 +528,23 @@ NEWS_TYPES = [
 ]
 
 def parse_3y_stats(text: str):
-    act = 'Disposed' if re.search(r'\bDisposed\b', text, re.I) else ('Acquired' if re.search(r'\bAcquired\b', text, re.I) else None)
-    shares = None; value = None
+    act = 'Disposed' if re.search(r'\bDisposed\b', text, re.I) else (
+          'Acquired' if re.search(r'\bAcquired\b', text, re.I) else None)
+    shares = None
+    value = None
     m = re.search(r'(\d{1,3}(?:,\d{3}){1,3})\s+(?:ordinary|fully\s+paid|shares)', text, re.I)
-    if m: shares = m.group(1)
+    if m:
+        shares = m.group(1)
     v = re.search(r'\$ ?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)', text)
-    if v: value = v.group(1)
-    parts=[]
-    if act: parts.append(act)
-    if shares: parts.append(f"{shares} shares")
-    if value: parts.append(f"A${value}")
+    if v:
+        value = v.group(1)
+    parts = []
+    if act:
+        parts.append(act)
+    if shares:
+        parts.append(f"{shares} shares")
+    if value:
+        parts.append(f"A${value}")
     return ' • '.join(parts) if parts else None
 
 def classify_text(text: str):
@@ -411,10 +554,12 @@ def classify_text(text: str):
     return 'Announcement', 'gen'
 
 def read_pdf_first_text(path: str):
-    if not HAVE_PYPDF: return ''
+    if not HAVE_PYPDF:
+        return ''
     try:
         reader = PdfReader(path)
-        if not reader.pages: return ''
+        if not reader.pages:
+            return ''
         page = reader.pages[0]
         t = page.extract_text() or ''
         t = re.sub(r'[ \t]+', ' ', t)
@@ -423,34 +568,47 @@ def read_pdf_first_text(path: str):
         return ''
 
 def parse_announcements():
-    rows=[]
+    rows = []
     if not os.path.isdir(ANN_DIR):
-        return pd.DataFrame(columns=['Date','Ticker','Type','Tag','Headline','Details','Path'])
+        return pd.DataFrame(columns=['Date', 'Ticker', 'Type', 'Tag', 'Headline', 'Details', 'Path'])
     for fp in sorted(glob.glob(os.path.join(ANN_DIR, '*.pdf'))):
         fname = os.path.basename(fp)
         ticker = None
         m = re.match(r'([A-Z]{2,4})[_-]', fname)
-        if m: ticker = m.group(1)
+        if m:
+            ticker = m.group(1)
         text = read_pdf_first_text(fp)
         _type, tag = classify_text(fname + " " + text)
-        # date: try to read; else file mtime
+
         d = None
         md = re.search(r'(\d{1,2}\s+[A-Za-z]{3,9}\s+20\d{2})', text)
         if md:
-            for fmt in ('%d %B %Y','%d %b %Y'):
-                try: d = datetime.strptime(md.group(1), fmt); break
-                except Exception: pass
+            for fmt in ('%d %B %Y', '%d %b %Y'):
+                try:
+                    d = datetime.strptime(md.group(1), fmt)
+                    break
+                except Exception:
+                    pass
         if d is None:
             d = datetime.fromtimestamp(os.path.getmtime(fp), tz=SYD).replace(tzinfo=None)
-        details = parse_3y_stats(text) if _type=='Appendix 3Y' else None
-        rows.append({'Date': d.date().isoformat(), 'Ticker': ticker or '',
-                     'Type': _type, 'Tag': tag, 'Headline': _type,
-                     'Details': details or '', 'Path': fp})
+
+        details = parse_3y_stats(text) if _type == 'Appendix 3Y' else None
+        rows.append({
+            'Date': d.date().isoformat(),
+            'Ticker': ticker or '',
+            'Type': _type,
+            'Tag': tag,
+            'Headline': _type,
+            'Details': details or '',
+            'Path': fp
+        })
     return pd.DataFrame(rows)
 
 # ---------------- Commentary ----------------
 def comment_for_row(r: pd.Series) -> str:
-    d200 = r['Dist_to_SMA200_%']; d52 = r['Dist_to_52W_High_%']; rsi = r['RSI14']
+    d200 = r['Dist_to_SMA200_%']
+    d52 = r['Dist_to_52W_High_%']
+    rsi = r['RSI14']
     if r['Signal'] == 'BUY':
         return f'Uptrend intact (Close>SMA200), recent 20D breakout, RSI {rsi:.0f} constructive.'
     if r['Signal'] == 'DCA':
@@ -467,11 +625,16 @@ def comment_for_row(r: pd.Series) -> str:
 frames, snaps = [], []
 for t, y in UNIVERSE:
     df = fetch(y)
-    if df.empty: continue
-    df['Ticker'] = t; frames.append(df)
-    ind = indicators(df).dropna(subset=['SMA200','SMA50','High20','RSI14','EMA21','Vol20','ATR14'])
-    if ind.empty: continue
-    last = ind.iloc[-1]; sig = label_row(last)
+    if df.empty:
+        continue
+    df['Ticker'] = t
+    frames.append(df)
+
+    ind = indicators(df).dropna(subset=['SMA200', 'SMA50', 'High20', 'RSI14', 'EMA21', 'Vol20', 'ATR14'])
+    if ind.empty:
+        continue
+    last = ind.iloc[-1]
+    sig = label_row(last)
 
     # Flag & Patterns
     flag_flag, flag_det = detect_flag(ind)
@@ -484,7 +647,7 @@ for t, y in UNIVERSE:
     if PATTERNS_CONFIRMED_ONLY:
         pats = [p for p in pats if p.get('status') == 'confirmed']
 
-    # Breakout-ready (DT invalidation)  ⭐ NEW
+    # Breakout-ready (DT invalidation)
     breakout_ready, breakout_info = (False, {})
     dt_pats = [p for p in pats if p.get('name') == 'Double Top']
     if dt_pats:
@@ -499,12 +662,16 @@ for t, y in UNIVERSE:
     gate_flag, gate_det = auto_dca_gate(ind)
 
     pname = pats[0]['name'] if pats else ''
-    palign = 'ALIGNED' if (pattern_bias(pname)==signal_bias(sig) or pattern_bias(pname)=='neutral' or signal_bias(sig)=='neutral') else 'CONFLICT'
+    palign = 'ALIGNED' if (
+        pattern_bias(pname) == signal_bias(sig)
+        or pattern_bias(pname) == 'neutral'
+        or signal_bias(sig) == 'neutral'
+    ) else 'CONFLICT'
 
     snaps.append({
         'Ticker': t,
-        'Name': COMPANY_META.get(t, ('',''))[0],
-        'Desc': COMPANY_META.get(t, ('',''))[1],
+        'Name': COMPANY_META.get(t, ('', ''))[0],
+        'Desc': COMPANY_META.get(t, ('', ''))[1],
         'LastDate': pd.to_datetime(last['Date']).strftime('%Y-%m-%d'),
         'LastClose': float(last['Close']),
         'SMA20': float(last['SMA20']),
@@ -515,7 +682,7 @@ for t, y in UNIVERSE:
         'Dist_to_52W_High_%': float(last['Dist_to_52W_High_%']),
         'Dist_to_SMA200_%': float(last['Dist_to_SMA200_%']),
         'Signal': sig,
-        'SignalAuto': bool(signal_auto),                   # ⭐ NEW
+        'SignalAuto': bool(signal_auto),
         'Comment': None,
         'Flag': bool(flag_flag),
         '_flag_info': flag_det,
@@ -531,7 +698,7 @@ for t, y in UNIVERSE:
         'AutoDCA_ReclaimMid': bool(gate_det.get('reclaim_mid', False)),
         'AutoDCA_AboveEMA21': bool(gate_det.get('above_ema21', False)),
         'AutoDCA_Fill_%': float(gate_det.get('gap_fill_%', np.nan)),
-        'BreakoutReady': bool(breakout_ready),             # ⭐ NEW
+        'BreakoutReady': bool(breakout_ready),
         'Breakout_Level': float(breakout_info.get('ceiling', np.nan)),
         'Breakout_Stop':  float(breakout_info.get('stop',    np.nan)),
     })
@@ -542,60 +709,90 @@ snaps_df = pd.DataFrame(snaps)
 # News ingest
 news_df = parse_announcements()
 today_syd = datetime.now(SYD).date()
+
 def recent_marker(row):
     try:
         d = datetime.strptime(row['Date'], '%Y-%m-%d').date()
         return (today_syd - d).days <= NEWS_WINDOW_DAYS
     except Exception:
         return False
+
 news_df['Recent'] = news_df.apply(recent_marker, axis=1)
 
 # Attach comments & charts and fold in news markers
-rows=[]
+rows = []
 for _, r in snaps_df.iterrows():
     r = r.copy()
-    t = r['Ticker']; df = prices_all[prices_all['Ticker']==t].copy()
+    t = r['Ticker']
+    df = prices_all[prices_all['Ticker'] == t].copy()
     ind = indicators(df)
     r['Comment'] = comment_for_row(r)
+
     if r.get('BreakoutReady', False):
-        r['Comment'] += f" • BreakoutReady: cleared DT ceiling {r['Breakout_Level']:.2f} with volume; stop≈{r['Breakout_Stop']:.2f} (ATR14)."
+        r['Comment'] += (
+            f" • BreakoutReady: cleared DT ceiling {r['Breakout_Level']:.2f} "
+            f"with volume; stop≈{r['Breakout_Stop']:.2f} (ATR14)."
+        )
     if r.get('SignalAuto', False):
         r['Comment'] += " • Signal auto-upgraded to BUY (DT invalidation)."
 
     # Short news note (last 14 days)
-    nd = news_df[news_df['Ticker']==t]
+    nd = news_df[news_df['Ticker'] == t]
     if not nd.empty:
         nd_recent = nd[nd['Recent']]
         if not nd_recent.empty:
             top = nd_recent.sort_values('Date').iloc[-1]
-            badge = 'Director sale' if top['Type']=='Appendix 3Y' and 'Disposed' in (top['Details'] or '') else top['Type']
+            badge = 'Director sale' if top['Type'] == 'Appendix 3Y' and 'Disposed' in (top['Details'] or '') else top['Type']
             r['Comment'] += f" • News: {badge} ({top['Date']})"
 
     # charts
+    spark_ind = ind.tail(SPARK_DAYS)
     r['_mini_spark'] = pio.to_html(
-        go.Figure(go.Scatter(x=ind.tail(SPARK_DAYS)['Date'], y=ind.tail(SPARK_DAYS)['Close'],
-                             mode='lines', line=dict(width=1)))
-        .update_layout(margin=dict(l=0,r=0,t=0,b=0), height=80, width=220,
-                       xaxis=dict(visible=False), yaxis=dict(visible=False), showlegend=False),
-        include_plotlyjs=False, full_html=False, config={'displayModeBar': False})
+        go.Figure(go.Scatter(
+            x=spark_ind['Date'],
+            y=spark_ind['Close'],
+            mode='lines',
+            line=dict(width=1)
+        )).update_layout(
+            margin=dict(l=0, r=0, t=0, b=0),
+            height=80,
+            width=220,
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            showlegend=False
+        ),
+        include_plotlyjs=False,
+        full_html=False,
+        config={'displayModeBar': False}
+    )
     r['_mini_candle'] = mini_candle(ind, r['_flag_info'] if r['Flag'] else None, r['_pattern_lines'])
     rows.append(r)
+
 snaps_df = pd.DataFrame(rows)
 
 # Rankings
 def rank(df):
-    buy = df[df.Signal=='BUY'].copy()
+    buy = df[df.Signal == 'BUY'].copy()
     buy = buy.sort_values('Dist_to_52W_High_%', ascending=False) if not buy.empty else buy
-    dca = df[df.Signal=='DCA'].copy().sort_values(['Dist_to_SMA200_%','RSI14'], ascending=[True, True])
-    watch = df[df.Signal=='WATCH'].copy()
+    dca = df[df.Signal == 'DCA'].copy().sort_values(
+        ['Dist_to_SMA200_%', 'RSI14'],
+        ascending=[True, True]
+    )
+    watch = df[df.Signal == 'WATCH'].copy()
     watch = watch.sort_values('Dist_to_52W_High_%', ascending=False) if not watch.empty else watch
-    avoid = df[df.Signal=='AVOID'].copy().sort_values(['Dist_to_SMA200_%','RSI14'], ascending=[True, True])
+    avoid = df[df.Signal == 'AVOID'].copy().sort_values(
+        ['Dist_to_SMA200_%', 'RSI14'],
+        ascending=[True, True]
+    )
     return buy, dca, watch, avoid
 
 BUY, DCA, WATCH, AVOID = rank(snaps_df)
-GATE  = snaps_df[snaps_df['AutoDCA_Flag']==True].copy().sort_values('AutoDCA_Fill_%', ascending=False)
-FLAGS = snaps_df[snaps_df['Flag']==True].copy()
-PATS  = snaps_df[snaps_df['_pattern_name']!=''].copy().sort_values(['_pattern_conf','Ticker'], ascending=[False, True])
+GATE  = snaps_df[snaps_df['AutoDCA_Flag'] == True].copy().sort_values('AutoDCA_Fill_%', ascending=False)
+FLAGS = snaps_df[snaps_df['Flag'] == True].copy()
+PATS  = snaps_df[snaps_df['_pattern_name'] != ''].copy().sort_values(
+    ['_pattern_conf', 'Ticker'],
+    ascending=[False, True]
+)
 NEWSCOUNT = len(news_df)
 BRKCOUNT  = int(snaps_df['BreakoutReady'].sum()) if not snaps_df.empty else 0
 
@@ -641,6 +838,24 @@ small{color:#a6b3c8}
 .newsneg{background:rgba(239,68,68,.18);color:#fecaca}
 .newspos{background:rgba(22,163,74,.18);color:#bbf7d0}
 .badge.auto{background:rgba(20,184,166,.20);color:#99f6e4}
+
+/* Responsive tweaks */
+@media (max-width: 900px){
+  body{font-size:14px;}
+  .container{max-width:100%;padding:12px;}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
+  .grid{grid-template-columns:1fr;gap:12px;}
+  .card{padding:10px;}
+  .table th,.table td{padding:4px 6px;font-size:11px;}
+  .kpi .num{font-size:20px;}
+}
+
+@media (max-width: 600px){
+  .navinner{padding:6px 10px;gap:4px;}
+  .kpis{grid-template-columns:1fr 1fr;}
+  .card > .table,
+  .card table{display:block;width:100%;overflow-x:auto;white-space:nowrap;}
+}
 """
 
 SORT_JS = """
@@ -679,13 +894,17 @@ function makeFilter(inputId, tableId){
 """
 
 def panel_overview(title, df):
-    rows=[]
+    rows = []
     for _, r in df.iterrows():
         flag_badge = '<span class="badge">FLAG</span>' if r.get('Flag') else ''
         pat_badge  = f"<span class='patternbadge'>{r.get('_pattern_name','')}</span>" if r.get('_pattern_name','') else ''
         align_badge = ''
         if r.get('_pattern_name',''):
-            align_badge = "<span class='badge' style='background:rgba(22,163,74,.18);color:#bbf7d0'>ALIGNED</span>" if r.get('_pattern_align')=='ALIGNED' else "<span class='badge' style='background:rgba(239,68,68,.18);color:#fecaca'>CONFLICT</span>"
+            align_badge = (
+                "<span class='badge' style='background:rgba(22,163,74,.18);color:#bbf7d0'>ALIGNED</span>"
+                if r.get('_pattern_align') == 'ALIGNED'
+                else "<span class='badge' style='background:rgba(239,68,68,.18);color:#fecaca'>CONFLICT</span>"
+            )
         br_badge = "<span class='badge' style='background:rgba(20,184,166,.20);color:#99f6e4'>Breakout Ready</span>" if r.get('BreakoutReady') else ''
         auto_badge = "<span class='badge auto'>auto</span>" if r.get('SignalAuto') else ''
         sig_label = r['Signal'] + (" (auto)" if r.get('SignalAuto') else "")
@@ -703,7 +922,7 @@ def panel_overview(title, df):
   <td>{r['Dist_to_SMA200_%']:.2f}%</td>
   <td>{r['_mini_candle']}</td>
 </tr>""")
-    body=''.join(rows) if rows else '<tr><td colspan="6" class="desc">None</td></tr>'
+    body = ''.join(rows) if rows else '<tr><td colspan="6" class="desc">None</td></tr>'
     return f"""
 <div class="card">
   <h3 style="margin:0 0 8px 0">{title}</h3>
@@ -713,7 +932,12 @@ def panel_overview(title, df):
 </div>"""
 
 def make_table(table_id, cols, rows_html, with_search=True):
-    search = f'<div class="card" style="margin:8px 0"><input id="{table_id}_q" placeholder="Type to filter..." style="width:100%;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#0d152b;color:#e7f1ff"/></div>' if with_search else ''
+    search = (
+        f'<div class="card" style="margin:8px 0"><input id="{table_id}_q" '
+        f'placeholder="Type to filter..." style="width:100%;padding:10px;border-radius:10px;'
+        f'border:1px solid rgba(255,255,255,.08);background:#0d152b;color:#e7f1ff"/></div>'
+        if with_search else ''
+    )
     return f"""
 {search}
 <div class="card">
@@ -726,7 +950,7 @@ def make_table(table_id, cols, rows_html, with_search=True):
 """
 
 # ---------------- Overview blocks ----------------
-counts = snaps_df['Signal'].value_counts().reindex(['BUY','DCA','WATCH','AVOID'], fill_value=0).to_dict()
+counts = snaps_df['Signal'].value_counts().reindex(['BUY', 'DCA', 'WATCH', 'AVOID'], fill_value=0).to_dict()
 kpi_html = f"""
 <div class="kpis">
   <div class="kpi buy">BUY<div class="num">{counts.get('BUY',0)}</div></div>
@@ -749,7 +973,7 @@ overview_html = f"""
 </div>"""
 
 # Auto-DCA Gate
-gate_rows=[]
+gate_rows = []
 for _, r in GATE.iterrows():
     gate_rows.append(f"""
 <tr>
@@ -760,6 +984,7 @@ for _, r in GATE.iterrows():
   <td>{r['AutoDCA_Fill_%']:.1f}%</td>
   <td>{r['_mini_candle']}</td>
 </tr>""")
+
 gate_html = f"""
 <div class="card">
   <h3 style="margin:0 0 6px 0">Auto-DCA Gate — Reaction setups</h3>
@@ -772,18 +997,21 @@ gate_html = f"""
 <script>makeSortable("tbl_gate");</script>
 """
 
-# Tickers
-tick_rows=[]
+# Tickers table
+tick_rows = []
 for _, r in snaps_df.sort_values('Ticker').iterrows():
     flag_badge = '<span class="badge">FLAG</span>' if r.get('Flag') else ''
     pat_badge  = f"<span class='patternbadge'>{r.get('_pattern_name','')}</span>" if r.get('_pattern_name','') else ''
-    tick_rows.append(f"<tr><td><a class='ticker' target='_blank' href='https://au.finance.yahoo.com/quote/{r['Ticker']}.AX'>{r['Ticker']}</a>{flag_badge}{pat_badge}</td><td>{r['Name']}</td><td>{r['Desc']}</td></tr>")
-tickers_html = make_table('tbl_tickers', ['Ticker','Name','Description'], ''.join(tick_rows))
+    tick_rows.append(
+        f"<tr><td><a class='ticker' target='_blank' href='https://au.finance.yahoo.com/quote/{r['Ticker']}.AX'>{r['Ticker']}</a>"
+        f"{flag_badge}{pat_badge}</td><td>{r['Name']}</td><td>{r['Desc']}</td></tr>"
+    )
+tickers_html = make_table('tbl_tickers', ['Ticker', 'Name', 'Description'], ''.join(tick_rows))
 
 # Signals (with commentary)
-sig_rows=[]
-for _, r in snaps_df.sort_values(['Signal','Ticker']).iterrows():
-    pat = r.get('_pattern_name','')
+sig_rows = []
+for _, r in snaps_df.sort_values(['Signal', 'Ticker']).iterrows():
+    pat = r.get('_pattern_name', '')
     pat_txt = f" • Pattern: {pat} ({r.get('_pattern_status','')}, conf {r.get('_pattern_conf',np.nan)})" if pat else ''
     sig_rows.append(f"""
 <tr>
@@ -801,7 +1029,7 @@ signals_html = f"""
 """
 
 # Patterns
-pat_rows=[]
+pat_rows = []
 for _, r in PATS.iterrows():
     pat_rows.append(f"""
 <tr>
@@ -825,12 +1053,14 @@ patterns_html = f"""
 """
 
 # News/Announcements table
-news_rows=[]
+news_rows = []
 for _, n in news_df.sort_values('Date', ascending=False).iterrows():
-    badge = 'newsneg' if n['Tag'] in ('reg','director') else ('newspos' if n['Tag'] in ('ops','issue') else '')
-    b = f"<span class='badge {badge}'>{n['Type']}</span>"
+    badge_class = 'newsneg' if n['Tag'] in ('reg', 'director') else ('newspos' if n['Tag'] in ('ops', 'issue') else '')
+    b = f"<span class='badge {badge_class}'>{n['Type']}</span>"
     link = f"<a class='ticker' href='{n['Path']}' target='_blank'>open</a>" if n['Path'] else ''
-    news_rows.append(f"<tr><td>{n['Date']}</td><td>{n['Ticker']}</td><td>{b}</td><td>{n['Headline']}</td><td>{n['Details']}</td><td>{link}</td></tr>")
+    news_rows.append(
+        f"<tr><td>{n['Date']}</td><td>{n['Ticker']}</td><td>{b}</td><td>{n['Headline']}</td><td>{n['Details']}</td><td>{link}</td></tr>"
+    )
 news_html = f"""
 <div class="card">
   <div class="smallmuted">Drop ASX PDFs into <code>{ANN_DIR}</code>. We parse type (3Y/2A/Price Query/etc.), extract director sale stats when present, and flag items from the last {NEWS_WINDOW_DAYS} days in Signals/Overview comments.</div>
@@ -838,32 +1068,34 @@ news_html = f"""
 </div>
 """
 
-# Prices preview + Sparks (no CSV export)
+# Prices preview (no CSV export now)
 if not prices_all.empty:
-    prev_rows=[]
+    prev_rows = []
     for t in sorted(prices_all['Ticker'].unique()):
-        sub=prices_all[prices_all['Ticker']==t].tail(1).iloc[0]
+        sub = prices_all[prices_all['Ticker'] == t].tail(1).iloc[0]
         prev_rows.append(
-            f"<tr><td>{t}</td>"
-            f"<td>{pd.to_datetime(sub['Date']).strftime('%Y-%m-%d')}</td>"
-            f"<td>{float(sub['Open']):.4f}</td>"
-            f"<td>{float(sub['High']):.4f}</td>"
-            f"<td>{float(sub['Low']):.4f}</td>"
-            f"<td>{float(sub['Close']):.4f}</td>"
+            f"<tr><td>{t}</td><td>{pd.to_datetime(sub['Date']).strftime('%Y-%m-%d')}</td>"
+            f"<td>{float(sub['Open']):.4f}</td><td>{float(sub['High']):.4f}</td>"
+            f"<td>{float(sub['Low']):.4f}</td><td>{float(sub['Close']):.4f}</td>"
             f"<td>{int(sub['Volume'])}</td></tr>"
         )
-    prices_html = make_table(
+    prices_preview = make_table(
         'tbl_prices',
-        ['Ticker','Date','Open','High','Low','Close','Volume'],
+        ['Ticker', 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'],
         ''.join(prev_rows)
     )
 else:
-    prices_html = '<div class="card"><div class="smallmuted">No price data.</div></div>'
+    prices_preview = '<div class="card"><div class="smallmuted">No price data.</div></div>'
 
-spark_rows=[]
+prices_html = prices_preview
+
+# MiniData (sparklines)
+spark_rows = []
 for _, r in snaps_df.sort_values('Ticker').iterrows():
-    spark_rows.append(f"<tr><td><a class='ticker' target='_blank' href='https://au.finance.yahoo.com/quote/{r['Ticker']}.AX'>{r['Ticker']}</a></td><td>{r['Name']}</td><td>{r['_mini_spark']}</td></tr>")
-minidata_html = make_table('tbl_minidata', ['Ticker','Name','90-day Sparkline'], ''.join(spark_rows))
+    spark_rows.append(
+        f"<tr><td><a class='ticker' target='_blank' href='https://au.finance.yahoo.com/quote/{r['Ticker']}.AX'>{r['Ticker']}</a></td><td>{r['Name']}</td><td>{r['_mini_spark']}</td></tr>"
+    )
+minidata_html = make_table('tbl_minidata', ['Ticker', 'Name', '90-day Sparkline'], ''.join(spark_rows))
 
 rules_html = f"<div class='card'><pre style='margin:0;white-space:pre-wrap'>{json.dumps(RULES | {'BREAKOUT_RULES': BREAKOUT_RULES, 'AUTO_UPGRADE_BREAKOUT': AUTO_UPGRADE_BREAKOUT}, indent=2)}</pre></div>"
 
@@ -871,7 +1103,7 @@ rules_html = f"<div class='card'><pre style='margin:0;white-space:pre-wrap'>{jso
 html = f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>TraderBruh — ASX TA (Full)</title>
+<title>TraderBruh — ASX TA (Web)</title>
 <link rel="preconnect" href="https://cdn.plot.ly"><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>{CSS}</style><script>{SORT_JS}</script></head>
 <body>
@@ -891,7 +1123,7 @@ html = f"""<!doctype html>
       {overview_html}
     </div>
 
-    <div class="section" id="gate"><h2>Auto-DCA Gate</h2>{gate_html}</div>
+    <div class="section" id="gate">{gate_html}</div>
     <div class="section" id="tickers"><h2>Tickers</h2>{tickers_html}</div>
     <div class="section" id="signals"><h2>Signals</h2>{signals_html}</div>
     <div class="section" id="patterns"><h2>Patterns</h2>{patterns_html}</div>
@@ -902,8 +1134,12 @@ html = f"""<!doctype html>
 
     <div class="card" style="margin-top:16px"><div class="smallmuted">© {datetime.now().year} TraderBruh — patterns & news parsing are heuristic; verify with primary filings.</div></div>
   </div>
-</body></html>"""
+</body></html>
+"""
 
+# Ensure output directory exists and write HTML
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 with open(OUTPUT_HTML, 'w', encoding='utf-8') as f:
     f.write(html)
+
 print('Done:', OUTPUT_HTML)
