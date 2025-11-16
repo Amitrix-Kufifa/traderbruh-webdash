@@ -97,20 +97,21 @@ def fetch(symbol: str) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
 
-    # Handle multi-index columns
+    # Handle multi-index columns from yfinance
     if isinstance(df.columns, pd.MultiIndex):
         try:
             df = df.xs(symbol, axis=1, level=-1, drop_level=True)
         except Exception:
             df.columns = df.columns.get_level_values(0)
 
+    # Keep only OHLCV and bring index out as a column
     df = df[['Open', 'High', 'Low', 'Close', 'Volume']].reset_index()
 
-    # Normalize date → ALWAYS pandas datetime (so no mixed date vs Timestamp)
+    # Normalise Date -> plain pandas datetime (no timezone stuff)
     date_col = 'Date' if 'Date' in df.columns else df.columns[0]
-    df['Date'] = pd.to_datetime(df[date_col], utc=True).dt.tz_convert(SYD).dt.tz_localize(None)
+    df['Date'] = pd.to_datetime(df[date_col])
 
-    # If daily candle missing (before ASX close prints), stitch last 60m bar
+    # If daily candle missing (after ~4:20pm local) stitch last 60m bar
     now_syd = datetime.now(SYD)
     if (
         now_syd.time() >= time(16, 20)
@@ -133,21 +134,22 @@ def fetch(symbol: str) -> pd.DataFrame:
                     intr.columns = intr.columns.get_level_values(0)
 
             intr = intr.reset_index()
-            intr['Date'] = pd.to_datetime(intr[intr.columns[0]], utc=True).dt.tz_convert(SYD)
+            intr['Date'] = pd.to_datetime(intr[intr.columns[0]])
 
             last = intr.tail(1).iloc[0]
-
-            # IMPORTANT: keep as Timestamp, NOT .date()
             top = pd.DataFrame([{
                 'Date': last['Date'],
                 'Open': float(last['Open']),
                 'High': float(last['High']),
                 'Low': float(last['Low']),
                 'Close': float(last['Close']),
-                'Volume': float(last['Volume'])
+                'Volume': float(last['Volume']),
             }])
 
             df = pd.concat([df, top], ignore_index=True)
+
+    # ✅ No extra pd.to_datetime(df['Date']) here – everything is already consistent
+    return df.dropna(subset=['Close'])
 
     # Force datetime again just in case
     df['Date'] = pd.to_datetime(df['Date'])
