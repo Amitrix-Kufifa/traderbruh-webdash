@@ -93,9 +93,11 @@ def fetch(symbol: str) -> pd.DataFrame:
         group_by='column',
         prepost=False
     )
+
     if df is None or df.empty:
         return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
 
+    # Handle multi-index columns
     if isinstance(df.columns, pd.MultiIndex):
         try:
             df = df.xs(symbol, axis=1, level=-1, drop_level=True)
@@ -103,10 +105,55 @@ def fetch(symbol: str) -> pd.DataFrame:
             df.columns = df.columns.get_level_values(0)
 
     df = df[['Open', 'High', 'Low', 'Close', 'Volume']].reset_index()
+
+    # Normalize date → ALWAYS pandas datetime (so no mixed date vs Timestamp)
     date_col = 'Date' if 'Date' in df.columns else df.columns[0]
     df['Date'] = pd.to_datetime(df[date_col], utc=True).dt.tz_convert(SYD).dt.tz_localize(None)
 
-     if now_syd.time
+    # If daily candle missing (before ASX close prints), stitch last 60m bar
+    now_syd = datetime.now(SYD)
+    if (
+        now_syd.time() >= time(16, 20)
+        and df['Date'].max().date() < now_syd.date()
+    ):
+        intr = yf.download(
+            symbol,
+            period='5d',
+            interval='60m',
+            auto_adjust=False,
+            progress=False,
+            prepost=False,
+            group_by='column'
+        )
+        if intr is not None and not intr.empty:
+            if isinstance(intr.columns, pd.MultiIndex):
+                try:
+                    intr = intr.xs(symbol, axis=1, level=-1, drop_level=True)
+                except Exception:
+                    intr.columns = intr.columns.get_level_values(0)
+
+            intr = intr.reset_index()
+            intr['Date'] = pd.to_datetime(intr[intr.columns[0]], utc=True).dt.tz_convert(SYD)
+
+            last = intr.tail(1).iloc[0]
+
+            # IMPORTANT: keep as Timestamp, NOT .date()
+            top = pd.DataFrame([{
+                'Date': last['Date'],
+                'Open': float(last['Open']),
+                'High': float(last['High']),
+                'Low': float(last['Low']),
+                'Close': float(last['Close']),
+                'Volume': float(last['Volume'])
+            }])
+
+            df = pd.concat([df, top], ignore_index=True)
+
+    # Force datetime again just in case
+    df['Date'] = pd.to_datetime(df['Date'])
+
+    return df.dropna(subset=['Close'])
+
 
 def indicators(df: pd.DataFrame) -> pd.DataFrame:
     x = df.copy().sort_values('Date').reset_index(drop=True)
