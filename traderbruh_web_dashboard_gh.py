@@ -860,78 +860,55 @@ BRKCOUNT  = int(snaps_df['BreakoutReady'].sum()) if not snaps_df.empty else 0
 # ---------------- HTML helpers ----------------
 CSS = """
 :root{
-  --bg:#0b1020; --card:#10172a; --ink:#e7f1ff; --muted:#a6b3c8; --soft:#162038;
-  --green:#16a34a; --amber:#f59e0b; --red:#ef4444; --blue:#38bdf8;
+  --bg:#020617;
+  --card:#0b1120;
+  --ink:#e5f0ff;
+  --muted:#94a3b8;
+  --accent:#38bdf8;
+  --green:#16a34a;
+  --amber:#f59e0b;
+  --red:#ef4444;
+  --purple:#a855f7;
 }
 *{
   box-sizing:border-box;
   font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
 }
-body{
+html,body{
   margin:0;
+  padding:0;
+}
+body{
   background:var(--bg);
   color:var(--ink);
   font-size:14px;
+  line-height:1.4;
+  overflow-x:hidden;
   -webkit-font-smoothing:antialiased;
 }
 
-/* --- Top nav, mobile-friendly --- */
-.nav{
-  position:sticky;
-  top:0;
-  z-index:40;
-  background:rgba(11,16,32,.96);
-  backdrop-filter:blur(10px);
-  border-bottom:1px solid rgba(255,255,255,.06);
-}
-.navinner{
-  max-width:1200px;
-  margin:0 auto;
-  display:flex;
-  gap:8px;
-  padding:8px 10px;
-  overflow-x:auto;
-  white-space:nowrap;
-}
-.navinner::-webkit-scrollbar{
-  display:none;
-}
-.nav a{
-  color:#cfe6ff;
-  text-decoration:none;
-  padding:6px 12px;
-  border-radius:999px;
-  font-size:13px;
-  flex:0 0 auto;
-  background:transparent;
-  border:1px solid transparent;
-}
-.nav a:hover{
-  background:rgba(255,255,255,.06);
-  border-color:rgba(148,163,184,.4);
-}
-
-/* --- Page shell --- */
+/* -------- Shell -------- */
 .container{
-  max-width:1200px;
+  width:100%;
+  max-width:1100px;
   margin:0 auto;
-  padding:10px 12px 32px 12px;
+  padding:12px 10px 32px;
 }
 .section{
-  scroll-margin-top:80px;
+  scroll-margin-top:76px;
   margin-top:18px;
 }
 .card{
   background:var(--card);
   border-radius:14px;
   padding:12px 12px 14px;
-  box-shadow:0 0 0 1px rgba(148,163,184,.25);
+  box-shadow:0 0 0 1px rgba(15,23,42,.9);
 }
 
-/* --- Typography --- */
+/* -------- Typography -------- */
 h1{
   margin:0 0 4px 0;
-  font-size:clamp(20px,5.4vw,28px);
+  font-size:clamp(20px,5.2vw,28px);
 }
 h2{
   margin:0 0 10px 0;
@@ -943,18 +920,53 @@ h3{
   color:#cfe6ff;
 }
 small,
-.smallmuted,
+.smallmuted{
+  color:var(--muted);
+  font-size:12px;
+}
 .desc{
   color:var(--muted);
   font-size:12px;
 }
 
-/* --- KPI row --- */
+/* -------- Top nav (no horizontal scroll) -------- */
+.nav{
+  position:sticky;
+  top:0;
+  z-index:50;
+  background:rgba(2,6,23,.96);
+  backdrop-filter:blur(12px);
+  border-bottom:1px solid rgba(15,23,42,1);
+}
+.navinner{
+  max-width:1100px;
+  margin:0 auto;
+  padding:8px 10px 10px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  align-items:center;
+}
+.nav a{
+  flex:0 0 auto;
+  color:#cfe6ff;
+  text-decoration:none;
+  font-size:12px;
+  padding:5px 9px;
+  border-radius:999px;
+  border:1px solid rgba(148,163,184,.4);
+  background:rgba(15,23,42,.95);
+}
+.nav a:hover{
+  background:rgba(148,163,184,.32);
+}
+
+/* -------- KPI row -------- */
 .kpis{
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
   gap:10px;
-  margin-top:12px;
+  margin-top:10px;
 }
 .kpi{
   border-radius:12px;
@@ -964,15 +976,20 @@ small,
   flex-direction:column;
   gap:4px;
 }
+.kpi .label{
+  font-size:11px;
+  color:var(--muted);
+}
 .kpi .num{
-  font-size:26px;
+  font-size:24px;
 }
 .kpi.buy{background:rgba(22,163,74,.18);color:#86efac;}
 .kpi.dca{background:rgba(245,158,11,.18);color:#fde68a;}
-.kpi.watch{background:rgba(56,189,248,.16);color:#7dd3fc;}
-.kpi.avoid{background:rgba(239,68,68,.18);color:#fca5a5;}
+.kpi.watch{background:rgba(56,189,248,.18);color:#7dd3fc;}
+.kpi.avoid{background:rgba(239,68,68,.22);color:#fecaca;}
+.kpi.flag{background:rgba(167,139,250,.22);color:#e9d5ff;}
 
-/* --- Panels & layout grid --- */
+/* -------- Layout for panels -------- */
 .grid{
   display:flex;
   flex-direction:column;
@@ -983,36 +1000,96 @@ small,
   width:100%;
 }
 
-/* --- Table styling --- */
+/* -------- New stock card layout (replaces wide tables) -------- */
+.stock-list{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  margin-top:6px;
+}
+.stock-card{
+  border-radius:10px;
+  background:#020617;
+  padding:8px 10px 10px;
+  border:1px solid rgba(148,163,184,.35);
+}
+.stock-card-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+.stock-card-last{
+  font-size:16px;
+  font-weight:600;
+}
+.stock-card-name{
+  margin-top:2px;
+}
+.stock-card-metrics{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px 14px;
+  margin-top:6px;
+  font-size:11px;
+}
+.stock-card-metrics .label{
+  color:var(--muted);
+  margin-right:4px;
+}
+.stock-card-metrics .value{
+  font-variant-numeric:tabular-nums;
+}
+.stock-card-chart{
+  margin-top:6px;
+}
+
+/* Make embedded Plotly charts responsive inside the cards */
+.stock-card-chart .mini,
+.stock-card-chart .spark,
+.stock-card-chart iframe,
+.stock-card-chart div{
+  width:100% !important;
+  max-width:100%;
+}
+
+/* -------- Generic table styling (for other sections) -------- */
 .table{
   width:100%;
   border-collapse:collapse;
-  font-size:12px;
+  table-layout:fixed;
 }
 .table th,
 .table td{
-  padding:6px 6px;
+  padding:6px 4px;
   border-bottom:1px solid rgba(255,255,255,.06);
+  font-size:12px;
+  vertical-align:middle;
 }
 .table th{
   color:#9fb3d9;
   text-align:left;
   background:rgba(255,255,255,.02);
-  position:sticky;
-  top:0;
-  z-index:1;
+}
+/* Kill that inline nowrap that was making phones scroll sideways */
+td[style*="white-space:nowrap"]{
+  white-space:normal !important;
 }
 
-/* --- Badges, numbers, links --- */
+/* Badges & text bits */
 .badge{
-  padding:.2rem .45rem;
+  display:inline-block;
+  margin-left:6px;
+  padding:.15rem .45rem;
   border-radius:999px;
-  font-size:12px;
+  font-size:11px;
 }
 .badge.buy{background:rgba(22,163,74,.18);color:#86efac;}
 .badge.dca{background:rgba(245,158,11,.18);color:#fde68a;}
 .badge.watch{background:rgba(56,189,248,.18);color:#7dd3fc;}
 .badge.avoid{background:rgba(239,68,68,.18);color:#fca5a5;}
+.badge.flag{background:rgba(167,139,250,.24);color:#e9d5ff;}
+
 .code{
   font-variant-numeric:tabular-nums;
 }
@@ -1026,41 +1103,39 @@ small,
   color:#bfdbfe;
 }
 
-/* --- Misc layout helpers --- */
+/* -------- Mini / spark charts (legacy) -------- */
+.mini,
+.spark{
+  display:block;
+  width:100% !important;
+  max-width:100%;
+  height:auto;
+}
+
+/* -------- Flex helpers & footer -------- */
 .flex{
   display:flex;
   gap:8px;
   align-items:center;
   flex-wrap:wrap;
 }
-
-/* --- Mini charts: full-width on phone --- */
-.mini{
-  width:100%;
-  max-width:360px;
-  height:150px;
-}
-.spark{
-  width:100%;
-  max-width:260px;
-  height:90px;
-}
-
-/* --- Footer --- */
 .footer{
   margin:24px 0 40px 0;
   color:var(--muted);
   font-size:12px;
 }
 
-/* --- Extra mobile tweaks --- */
+/* -------- Mobile tweaks -------- */
 @media (max-width: 480px){
+  .container{
+    padding:10px 8px 28px;
+  }
   .kpis{
     grid-template-columns:1fr;
   }
 }
 
-/* --- Desktop / tablet enhancements --- */
+/* -------- Desktop / tablet enhancements -------- */
 @media (min-width: 900px){
   body{
     font-size:15px;
@@ -1078,6 +1153,7 @@ small,
   }
 }
 """
+
 
 
 SORT_JS = """
@@ -1115,43 +1191,66 @@ function makeFilter(inputId, tableId){
 }
 """
 
-def panel_overview(title, df):
-    rows = []
+def panel_overview(title, df, badge_class):
+    """Render BUY / DCA / WATCH / AVOID buckets as mobile-friendly cards."""
+    if df is None or len(df) == 0:
+        return f"""
+<div class="panel">
+  <div class="card">
+    <h3>{title}</h3>
+    <p class="smallmuted">No tickers currently in this bucket.</p>
+  </div>
+</div>
+"""
+
+    cards = []
     for _, r in df.iterrows():
-        flag_badge = '<span class="badge">FLAG</span>' if r.get('Flag') else ''
-        pat_badge  = f"<span class='patternbadge'>{r.get('_pattern_name','')}</span>" if r.get('_pattern_name','') else ''
-        align_badge = ''
-        if r.get('_pattern_name',''):
-            align_badge = (
-                "<span class='badge' style='background:rgba(22,163,74,.18);color:#bbf7d0'>ALIGNED</span>"
-                if r.get('_pattern_align') == 'ALIGNED'
-                else "<span class='badge' style='background:rgba(239,68,68,.18);color:#fecaca'>CONFLICT</span>"
-            )
-        br_badge = "<span class='badge' style='background:rgba(20,184,166,.20);color:#99f6e4'>Breakout Ready</span>" if r.get('BreakoutReady') else ''
-        auto_badge = "<span class='badge auto'>auto</span>" if r.get('SignalAuto') else ''
-        sig_label = r['Signal'] + (" (auto)" if r.get('SignalAuto') else "")
-        rows.append(f"""
-<tr>
-  <td style="white-space:nowrap">
-    <a class="ticker" href="https://au.finance.yahoo.com/quote/{r['Ticker']}.AX" target="_blank">{r['Ticker']}</a>
-    {flag_badge}{pat_badge}{align_badge}{br_badge}{auto_badge}
-    <div class="desc">{r['Name']}</div>
-    <div class="smallmuted"><b>{sig_label}</b> — {r['Comment']}</div>
-  </td>
-  <td>{r['LastClose']:.4f}</td>
-  <td>{r['RSI14']:.2f}</td>
-  <td>{r['Dist_to_52W_High_%']:.2f}%</td>
-  <td>{r['Dist_to_SMA200_%']:.2f}%</td>
-  <td>{r['_mini_candle']}</td>
-</tr>""")
-    body = ''.join(rows) if rows else '<tr><td colspan="6" class="desc">None</td></tr>'
+        # Safety: some rows might not have mini chart if something failed upstream
+        mini_html = r.get('_mini_candle', '') or ''
+
+        cards.append(f"""
+<div class="stock-card">
+  <div class="stock-card-header">
+    <div>
+      <a class="ticker"
+         href="https://au.finance.yahoo.com/quote/{r['Ticker']}.AX"
+         target="_blank" rel="noopener">
+        {r['Ticker']}
+      </a>
+      <span class="badge {badge_class}">{badge_class.upper()}</span>
+    </div>
+    <div class="stock-card-last code">{r['LastClose']:.4f}</div>
+  </div>
+
+  <div class="stock-card-name desc">{r['Name']}</div>
+
+  <div class="stock-card-metrics">
+    <div><span class="label">RSI14</span>
+         <span class="value code">{r['RSI14']:.2f}</span></div>
+    <div><span class="label">→52W%</span>
+         <span class="value code">{r['Dist_to_52W_High_%']:.2f}%</span></div>
+    <div><span class="label">→200DMA%</span>
+         <span class="value code">{r['Dist_to_SMA200_%']:.2f}%</span></div>
+  </div>
+
+  <div class="stock-card-chart">
+    {mini_html}
+  </div>
+</div>
+""")
+
     return f"""
-<div class="card">
-  <h3 style="margin:0 0 8px 0">{title}</h3>
-  <table class="table"><thead>
-    <tr><th>Ticker</th><th>Last</th><th>RSI</th><th>→52W%</th><th>→200DMA%</th><th>Mini</th></tr>
-  </thead><tbody>{body}</tbody></table>
-</div>"""
+<div class="panel">
+  <div class="card">
+    <h3>{title}</h3>
+    <div class="stock-list">
+      {''.join(cards)}
+    </div>
+  </div>
+</div>
+"""
+
+
 
 def make_table(table_id, cols, rows_html, with_search=True):
     search = (
@@ -1196,11 +1295,12 @@ kpi_html = f"""
 
 overview_html = f"""
 <div class="grid">
-  {panel_overview('BUY — Act now (ranked)',  BUY.head(12))}
-  {panel_overview('DCA — Controlled pullbacks', DCA.head(12))}
-  {panel_overview('WATCH — Close to triggers', WATCH.head(12))}
-  {panel_overview('AVOID — Downtrends', AVOID.head(12))}
+  {panel_overview('BUY — Act now (ranked)',  BUY.head(12), 'buy')}
+  {panel_overview('DCA — Controlled pullbacks', DCA.head(12), 'dca')}
+  {panel_overview('WATCH — Close to triggers', WATCH.head(12), 'watch')}
+  {panel_overview('AVOID — Downtrends', AVOID.head(12), 'avoid')}
 </div>"""
+
 
 # Auto-DCA Gate
 gate_rows = []
