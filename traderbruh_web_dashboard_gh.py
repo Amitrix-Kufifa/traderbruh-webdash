@@ -863,20 +863,125 @@ CSS = """
   --bg:#0b1020; --card:#10172a; --ink:#e7f1ff; --muted:#a6b3c8;
   --green:#16a34a; --amber:#f59e0b; --red:#ef4444; --blue:#38bdf8; --violet:#a78bfa; --mint:#14b8a6;
 }
-*{box-sizing:border-box;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
-body{margin:0;background:var(--bg);color:var(--ink)}
-.container{max-width:1320px;margin:0 auto;padding:20px}
-h1{margin:0 0 2px 0;font-size:26px}
-small{color:#a6b3c8}
-.nav{position:sticky;top:0;background:rgba(11,16,32,.9);backdrop-filter:blur(10px);z-index:10;border-bottom:1px solid rgba(255,255,255,.06)}
-.navinner{max-width:1320px;margin:0 auto;display:flex;gap:12px;padding:10px 20px;flex-wrap:wrap}
-.nav a{color:#cfe6ff;text-decoration:none;padding:6px 10px;border-radius:8px}
-.nav a:hover{background:rgba(255,255,255,.06)}
-.section{scroll-margin-top:64px;margin-top:18px}
-.card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 0 0 1px rgba(255,255,255,.05) inset}
-.kpis{display:grid;grid-template-columns:repeat(9,1fr);gap:12px}
-.kpi{border-radius:12px;padding:12px 14px;font-weight:600}
-.kpi .num{font-size:28px;margin-top:6px}
+
+*{
+  box-sizing:border-box;
+  font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;
+}
+
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+}
+
+/* -------- Layout -------- */
+
+.container{
+  max-width:1200px;
+  margin:0 auto;
+  padding:16px;
+}
+
+h1{
+  margin:0 0 4px 0;
+  font-size:24px;
+}
+
+h2{
+  margin:0 0 8px 0;
+  font-size:20px;
+}
+
+h3{
+  margin:0 0 6px 0;
+  font-size:16px;
+}
+
+small{
+  color:var(--muted);
+  font-size:12px;
+}
+
+/* Sticky top nav, scrollable on mobile */
+
+.nav{
+  position:sticky;
+  top:0;
+  background:rgba(11,16,32,.96);
+  backdrop-filter:blur(10px);
+  z-index:10;
+  border-bottom:1px solid rgba(255,255,255,.06);
+}
+
+.navinner{
+  max-width:1200px;
+  margin:0 auto;
+  display:flex;
+  gap:8px;
+  padding:8px 12px;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+}
+
+.navinner::-webkit-scrollbar{
+  height:4px;
+}
+.navinner::-webkit-scrollbar-thumb{
+  background:rgba(148,163,184,.7);
+  border-radius:999px;
+}
+
+.nav a{
+  color:#cfe6ff;
+  text-decoration:none;
+  padding:6px 10px;
+  border-radius:999px;
+  font-size:13px;
+  white-space:nowrap;
+}
+.nav a:hover{
+  background:rgba(255,255,255,.06);
+}
+
+.section{
+  scroll-margin-top:70px;
+  margin-top:18px;
+}
+
+/* Cards */
+
+.card{
+  background:var(--card);
+  border-radius:12px;
+  padding:12px;
+  box-shadow:0 0 0 1px rgba(255,255,255,.05) inset;
+}
+
+.search-card{
+  padding:8px 10px;
+}
+
+/* KPI tiles */
+
+.kpis{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
+  margin-top:10px;
+}
+
+.kpi{
+  border-radius:12px;
+  padding:10px 12px;
+  font-weight:600;
+  font-size:12px;
+}
+.kpi .num{
+  font-size:22px;
+  margin-top:4px;
+}
+
 .kpi.buy{background:rgba(22,163,74,.15);color:#86efac}
 .kpi.dca{background:rgba(245,158,11,.15);color:#fde68a}
 .kpi.watch{background:rgba(56,189,248,.12);color:#7dd3fc}
@@ -886,30 +991,148 @@ small{color:#a6b3c8}
 .kpi.pattern{background:rgba(34,197,94,.18);color:#bbf7d0}
 .kpi.news{background:rgba(59,130,246,.18);color:#bfdbfe}
 .kpi.break{background:rgba(20,184,166,.18);color:#99f6e4}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:12px}
-.table{width:100%;border-collapse:collapse}
-.table th,.table td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.06);vertical-align:top;font-size:13px}
-.table th{color:#9fb3d9;text-align:left;background:rgba(255,255,255,.02);cursor:pointer}
-.ticker{font-weight:700;color:#93c5fd;text-decoration:none}
-.ticker:hover{text-decoration:underline;color:#bfdbfe}
-.desc{color:#a6b3c8;font-size:12px}
-.badge{display:inline-block;margin-left:6px;padding:.15rem .45rem;border-radius:999px;background:rgba(167,139,250,.18);color:#e9d5ff;font-size:11px}
-.patternbadge{display:inline-block;margin-left:6px;padding:.15rem .45rem;border-radius:999px;background:rgba(34,197,94,.18);color:#bbf7d0;font-size:11px}
-.smallmuted{color:#a6b3c8;font-size:12px}
-.newsneg{background:rgba(239,68,68,.18);color:#fecaca}
-.newspos{background:rgba(22,163,74,.18);color:#bbf7d0}
-.badge.auto{background:rgba(20,184,166,.20);color:#99f6e4}
 
-/* Responsive tweaks */
-@media (max-width: 900px){
-  body{font-size:14px;}
-  .container{max-width:100%;padding:12px;}
-  .kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
-  .grid{grid-template-columns:1fr;gap:12px;}
-  .card{padding:10px;}
-  .table th,.table td{padding:4px 6px;font-size:11px;}
-  .kpi .num{font-size:20px;}
+/* Overview grid */
+
+.grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:16px;
+  margin-top:12px;
 }
+
+/* Tables & scroll containers */
+
+.table-wrap{
+  width:100%;
+  overflow-x:auto;
+}
+
+.table{
+  width:100%;
+  min-width:520px; /* allows horizontal scroll on phones */
+  border-collapse:collapse;
+}
+
+.table th,
+.table td{
+  padding:6px 8px;
+  border-bottom:1px solid rgba(255,255,255,.06);
+  vertical-align:top;
+  font-size:13px;
+}
+
+.table th{
+  color:#9fb3d9;
+  text-align:left;
+  background:rgba(255,255,255,.02);
+  cursor:pointer;
+}
+
+/* Text styles */
+
+.ticker{
+  font-weight:700;
+  color:#93c5fd;
+  text-decoration:none;
+}
+.ticker:hover{
+  text-decoration:underline;
+  color:#bfdbfe;
+}
+
+.desc{
+  color:#a6b3c8;
+  font-size:12px;
+}
+
+.smallmuted{
+  color:#a6b3c8;
+  font-size:12px;
+}
+
+.badge{
+  display:inline-block;
+  margin-left:6px;
+  padding:.15rem .45rem;
+  border-radius:999px;
+  background:rgba(167,139,250,.18);
+  color:#e9d5ff;
+  font-size:11px;
+}
+
+.patternbadge{
+  display:inline-block;
+  margin-left:6px;
+  padding:.15rem .45rem;
+  border-radius:999px;
+  background:rgba(34,197,94,.18);
+  color:#bbf7d0;
+  font-size:11px;
+}
+
+.newsneg{
+  background:rgba(239,68,68,.18);
+  color:#fecaca;
+}
+
+.newspos{
+  background:rgba(22,163,74,.18);
+  color:#bbf7d0;
+}
+
+.badge.auto{
+  background:rgba(20,184,166,.20);
+  color:#99f6e4;
+}
+
+/* -------- Mobile tweaks -------- */
+
+@media (max-width: 900px){
+  .container{
+    padding:10px;
+  }
+  .grid{
+    grid-template-columns:1fr;
+  }
+}
+
+@media (max-width: 800px){
+  .kpis{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+
+@media (max-width: 600px){
+  h1{font-size:22px;}
+  h2{font-size:18px;}
+  h3{font-size:15px;}
+
+  .card{
+    padding:10px;
+  }
+
+  .table{
+    min-width:360px;
+  }
+
+  .table th,
+  .table td{
+    padding:4px 6px;
+    font-size:12px;
+  }
+
+  .kpi{
+    font-size:11px;
+    padding:8px 10px;
+  }
+
+  .kpi .num{
+    font-size:20px;
+  }
+}
+"""
+
 
 @media (max-width: 600px){
   .navinner{padding:6px 10px;gap:4px;}
@@ -994,21 +1217,29 @@ def panel_overview(title, df):
 
 def make_table(table_id, cols, rows_html, with_search=True):
     search = (
-        f'<div class="card" style="margin:8px 0"><input id="{table_id}_q" '
-        f'placeholder="Type to filter..." style="width:100%;padding:10px;border-radius:10px;'
-        f'border:1px solid rgba(255,255,255,.08);background:#0d152b;color:#e7f1ff"/></div>'
+        f'<div class="card search-card"><input id="{table_id}_q" '
+        f'placeholder="Type to filter..." '
+        f'style="width:100%;padding:10px;border-radius:10px;'
+        f'border:1px solid rgba(255,255,255,.08);'
+        f'background:#0d152b;color:#e7f1ff"/></div>'
         if with_search else ''
     )
     return f"""
 {search}
 <div class="card">
-  <table class="table" id="{table_id}">
-    <thead><tr>{''.join(f'<th>{c}</th>' for c in cols)}</tr></thead>
-    <tbody>{rows_html}</tbody>
-  </table>
+  <div class="table-wrap">
+    <table class="table" id="{table_id}">
+      <thead><tr>{''.join(f'<th>{c}</th>' for c in cols)}</tr></thead>
+      <tbody>{rows_html}</tbody>
+    </table>
+  </div>
 </div>
-<script>makeSortable("{table_id}");{(" makeFilter('"+table_id+"_q', '"+table_id+"');") if with_search else ""}</script>
+<script>
+  makeSortable("{table_id}");
+  {"makeFilter('" + table_id + "_q', '" + table_id + "');" if with_search else ""}
+</script>
 """
+
 
 # ---------------- Overview blocks ----------------
 counts = snaps_df['Signal'].value_counts().reindex(['BUY', 'DCA', 'WATCH', 'AVOID'], fill_value=0).to_dict()
