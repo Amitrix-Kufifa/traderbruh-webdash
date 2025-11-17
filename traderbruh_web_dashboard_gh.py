@@ -84,6 +84,7 @@ UNIVERSE = [(t, f'{t}.AX') for t in COMPANY_META.keys()]
 
 # ---------------- Data & TA ----------------
 def fetch(symbol: str) -> pd.DataFrame:
+    # Download daily data
     df = yf.download(
         symbol,
         period=f'{FETCH_DAYS}d',
@@ -97,25 +98,28 @@ def fetch(symbol: str) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
 
-    # Handle multi-index columns from yfinance
+    # Handle multi-index columns from yfinance (e.g. ('Open', 'DRO.AX'))
     if isinstance(df.columns, pd.MultiIndex):
         try:
             df = df.xs(symbol, axis=1, level=-1, drop_level=True)
         except Exception:
             df.columns = df.columns.get_level_values(0)
 
-    # Keep only OHLCV and bring index out as a column
+    # Keep only OHLCV and bring index out as a Date column
     df = df[['Open', 'High', 'Low', 'Close', 'Volume']].reset_index()
 
-    # Normalise Date -> plain pandas datetime (no timezone stuff)
+    # --- STEP 1: Parse ALL dates as UTC tz-aware (handles any mix cleanly) ---
     date_col = 'Date' if 'Date' in df.columns else df.columns[0]
-    df['Date'] = pd.to_datetime(df[date_col])
+    df['Date'] = pd.to_datetime(df[date_col], utc=True)
 
-    # If daily candle missing (after ~4:20pm local) stitch last 60m bar
+    # --- STEP 2: If today's daily candle isn't printed yet, stitch last 60m bar ---
     now_syd = datetime.now(SYD)
+    # Compare last date in *Sydney* time to today's Sydney date
+    last_date_syd = df['Date'].dt.tz_convert(SYD).dt.date.max()
+
     if (
-        now_syd.time() >= time(16, 20)
-        and df['Date'].max().date() < now_syd.date()
+        now_syd.time() >= time(16, 20) and
+        last_date_syd < now_syd.date()
     ):
         intr = yf.download(
             symbol,
@@ -134,11 +138,12 @@ def fetch(symbol: str) -> pd.DataFrame:
                     intr.columns = intr.columns.get_level_values(0)
 
             intr = intr.reset_index()
-            intr['Date'] = pd.to_datetime(intr[intr.columns[0]])
+            # Also parse intraday times as UTC tz-aware
+            intr['Date'] = pd.to_datetime(intr[intr.columns[0]], utc=True)
 
             last = intr.tail(1).iloc[0]
             top = pd.DataFrame([{
-                'Date': last['Date'],
+                'Date': last['Date'],     # still tz-aware UTC here
                 'Open': float(last['Open']),
                 'High': float(last['High']),
                 'Low': float(last['Low']),
@@ -147,6 +152,13 @@ def fetch(symbol: str) -> pd.DataFrame:
             }])
 
             df = pd.concat([df, top], ignore_index=True)
+
+    # --- STEP 3: Convert everything to Sydney, then drop timezone (tz-naive) ---
+    df['Date'] = df['Date'].dt.tz_convert(SYD).dt.tz_localize(None)
+
+    # Now Date is a clean, tz-naive datetime64[ns] series – no mixing possible
+    return df.dropna(subset=['Close'])
+
 
     # ✅ No extra pd.to_datetime(df['Date']) here – everything is already consistent
     return df.dropna(subset=['Close'])
