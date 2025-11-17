@@ -1133,15 +1133,6 @@ small{
 }
 """
 
-
-@media (max-width: 600px){
-  .navinner{padding:6px 10px;gap:4px;}
-  .kpis{grid-template-columns:1fr 1fr;}
-  .card > .table,
-  .card table{display:block;width:100%;overflow-x:auto;white-space:nowrap;}
-}
-"""
-
 SORT_JS = """
 function makeSortable(tableId){
   const table = document.getElementById(tableId); if(!table) return;
