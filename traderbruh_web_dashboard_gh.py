@@ -670,17 +670,72 @@ def comment_for_row(r: pd.Series) -> str:
     d200 = r['Dist_to_SMA200_%']
     d52 = r['Dist_to_52W_High_%']
     rsi = r['RSI14']
-    if r['Signal'] == 'BUY':
-        return f'Uptrend intact (Close>SMA200), recent 20D breakout, RSI {rsi:.0f} constructive.'
-    if r['Signal'] == 'DCA':
-        return f'Near 200DMA (Δ {d200:.1f}%), RSI {rsi:.0f} soft — add on controlled pullbacks.'
-    if r['Signal'] == 'AVOID':
-        return f'Weak/declining trend (Δ to 200DMA {d200:.1f}%), RSI {rsi:.0f} — wait for reclaim.'
+    sig = str(r.get('Signal', '')).upper()
+
+    # Explicit signal buckets first
+    if sig == 'BUY':
+        return (
+            f"Uptrend intact (close above 200DMA and prior 20-day breakout). "
+            f"RSI {rsi:.0f} is constructive, suggesting trend strength without being extremely overbought."
+        )
+
+    if sig == 'DCA':
+        return (
+            f"Trading close to the 200DMA (Δ {d200:.1f}%), with RSI {rsi:.0f} cooling. "
+            f"Bias is positive but not urgent — better suited for staggered adds on controlled pullbacks."
+        )
+
+    if sig == 'AVOID':
+        return (
+            f"Trend is weak/under pressure (Δ to 200DMA {d200:.1f}%). "
+            f"RSI {rsi:.0f} confirms lack of momentum — sidelines until it can reclaim the 200DMA or build a base."
+        )
+
+    if sig == 'WATCH':
+        # Build a more narrative explanation for 'close to triggers'
+        distance_bits = []
+        if d52 > -2:
+            distance_bits.append(f"within {abs(d52):.1f}% of its 52-week high")
+        elif d52 > -6:
+            distance_bits.append(f"only {abs(d52):.1f}% below the recent high zone")
+
+        if d200 > 0:
+            distance_bits.append(f"trading {d200:.1f}% above the 200DMA (uptrend still intact)")
+        else:
+            distance_bits.append(f"hovering {abs(d200):.1f}% below the 200DMA (trying to reclaim trend)")
+
+        if rsi >= 70:
+            rsi_txt = f"RSI {rsi:.0f} shows strong, possibly overbought momentum"
+        elif rsi >= 55:
+            rsi_txt = f"RSI {rsi:.0f} is constructive, not stretched"
+        else:
+            rsi_txt = f"RSI {rsi:.0f} is still benign"
+
+        distance_part = ", ".join(distance_bits)
+        return (
+            f"{distance_part}, and {rsi_txt}. "
+            f"Price is sitting near a potential inflection zone — keep it on watch for either a clean breakout "
+            f"through recent highs or a healthy pullback/retest before committing capital."
+        )
+
+    # Generic metric-based commentary for anything else
     if d52 > -2:
-        return f'Within {abs(d52):.1f}% of 52W high — watch for breakout.'
+        return (
+            f"Within {abs(d52):.1f}% of its 52-week high with an established uptrend. "
+            f"This is late in the move — best treated as a breakout/continuation setup rather than an early entry."
+        )
+
     if d200 > 0 and not (45 <= rsi <= 70):
-        return f'Above 200DMA but RSI {rsi:.0f} — wait for strength/setup.'
-    return 'Neutral — build evidence (base, reclaim, or breakouts).'
+        return (
+            f"Above the 200DMA (Δ {d200:.1f}%) but RSI {rsi:.0f} is not in the usual 45–70 trend zone. "
+            f"Momentum and trend are out of sync — wait for either better structure or clearer strength."
+        )
+
+    return (
+        "Neutral setup — trend and momentum are not giving a strong edge yet; "
+        "let more price action build the story before acting."
+    )
+
 
 # ---------------- Build dataset ----------------
 frames, snaps = [], []
@@ -877,23 +932,27 @@ CSS = """
 html,body{
   margin:0;
   padding:0;
+  width:100%;
+  max-width:100%;
 }
 body{
   background:var(--bg);
   color:var(--ink);
-  font-size:16px;
+  font-size:15px;
   line-height:1.5;
   overflow-x:hidden;
   -webkit-font-smoothing:antialiased;
 }
 
+
 /* -------- Shell -------- */
 .container{
   width:100%;
-  max-width:1100px;
-  margin:0 auto;
+  max-width:100%;
+  margin:0;
   padding:12px 10px 32px;
 }
+
 .section{
   scroll-margin-top:76px;
   margin-top:18px;
@@ -939,14 +998,16 @@ small,
   border-bottom:1px solid rgba(15,23,42,1);
 }
 .navinner{
-  max-width:1100px;
-  margin:0 auto;
+  width:100%;
+  max-width:100%;
+  margin:0;
   padding:8px 10px 10px;
   display:flex;
   flex-wrap:wrap;
   gap:6px;
   align-items:center;
 }
+
 .nav a{
   flex:0 0 auto;
   color:#cfe6ff;
