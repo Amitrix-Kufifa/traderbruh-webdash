@@ -1008,6 +1008,7 @@ small,
   align-items:center;
 }
 
+
 .nav a{
   flex:0 0 auto;
   color:#cfe6ff;
@@ -1654,7 +1655,8 @@ rules_html = f"<div class='card'><pre style='margin:0;white-space:pre-wrap'>{jso
 # ---------------- Final HTML ----------------
 html = f"""<!doctype html>
 <html lang="en"><head>
-<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>TraderBruh — ASX TA (Web)</title>
 <link rel="preconnect" href="https://cdn.plot.ly"><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>{CSS}</style><script>{SORT_JS}</script></head>
