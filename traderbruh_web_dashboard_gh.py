@@ -881,8 +881,8 @@ html,body{
 body{
   background:var(--bg);
   color:var(--ink);
-  font-size:14px;
-  line-height:1.4;
+  font-size:16px;
+  line-height:1.5;
   overflow-x:hidden;
   -webkit-font-smoothing:antialiased;
 }
@@ -908,15 +908,15 @@ body{
 /* -------- Typography -------- */
 h1{
   margin:0 0 4px 0;
-  font-size:clamp(20px,5.2vw,28px);
+  font-size:clamp(22px,5.4vw,30px);
 }
 h2{
   margin:0 0 10px 0;
-  font-size:clamp(16px,4.4vw,22px);
+  font-size:clamp(18px,4.6vw,24px);
 }
 h3{
   margin:0 0 8px 0;
-  font-size:15px;
+  font-size:16px;
   color:#cfe6ff;
 }
 small,
@@ -926,10 +926,10 @@ small,
 }
 .desc{
   color:var(--muted);
-  font-size:12px;
+  font-size:13px;
 }
 
-/* -------- Top nav (no horizontal scroll) -------- */
+/* -------- Top nav -------- */
 .nav{
   position:sticky;
   top:0;
@@ -951,8 +951,8 @@ small,
   flex:0 0 auto;
   color:#cfe6ff;
   text-decoration:none;
-  font-size:12px;
-  padding:5px 9px;
+  font-size:13px;
+  padding:6px 10px;
   border-radius:999px;
   border:1px solid rgba(148,163,184,.4);
   background:rgba(15,23,42,.95);
@@ -988,6 +988,10 @@ small,
 .kpi.watch{background:rgba(56,189,248,.18);color:#7dd3fc;}
 .kpi.avoid{background:rgba(239,68,68,.22);color:#fecaca;}
 .kpi.flag{background:rgba(167,139,250,.22);color:#e9d5ff;}
+.kpi.break{background:rgba(56,189,248,.18);color:#7dd3fc;}
+.kpi.gate{background:rgba(245,158,11,.18);color:#fde68a;}
+.kpi.pattern{background:rgba(94,234,212,.18);color:#a5f3fc;}
+.kpi.news{background:rgba(59,130,246,.18);color:#bfdbfe;}
 
 /* -------- Layout for panels -------- */
 .grid{
@@ -1000,7 +1004,7 @@ small,
   width:100%;
 }
 
-/* -------- New stock card layout (replaces wide tables) -------- */
+/* -------- Overview stock cards -------- */
 .stock-list{
   display:flex;
   flex-direction:column;
@@ -1010,7 +1014,7 @@ small,
 .stock-card{
   border-radius:10px;
   background:#020617;
-  padding:8px 10px 10px;
+  padding:9px 10px 10px;
   border:1px solid rgba(148,163,184,.35);
 }
 .stock-card-header{
@@ -1020,7 +1024,7 @@ small,
   gap:8px;
 }
 .stock-card-last{
-  font-size:16px;
+  font-size:18px;
   font-weight:600;
 }
 .stock-card-name{
@@ -1033,6 +1037,10 @@ small,
   margin-top:6px;
   font-size:11px;
 }
+.stock-card-comment{
+  margin-top:6px;
+  font-size:13px;
+}
 .stock-card-metrics .label{
   color:var(--muted);
   margin-right:4px;
@@ -1043,8 +1051,6 @@ small,
 .stock-card-chart{
   margin-top:6px;
 }
-
-/* Make embedded Plotly charts responsive inside the cards */
 .stock-card-chart .mini,
 .stock-card-chart .spark,
 .stock-card-chart iframe,
@@ -1053,17 +1059,20 @@ small,
   max-width:100%;
 }
 
-/* -------- Generic table styling (for other sections) -------- */
+/* -------- Tables -------- */
+.table-wrap{
+  width:100%;
+  overflow-x:auto;
+}
 .table{
   width:100%;
   border-collapse:collapse;
-  table-layout:fixed;
 }
 .table th,
 .table td{
-  padding:6px 4px;
+  padding:8px 6px;
   border-bottom:1px solid rgba(255,255,255,.06);
-  font-size:12px;
+  font-size:13px;
   vertical-align:middle;
 }
 .table th{
@@ -1071,12 +1080,8 @@ small,
   text-align:left;
   background:rgba(255,255,255,.02);
 }
-/* Kill that inline nowrap that was making phones scroll sideways */
-td[style*="white-space:nowrap"]{
-  white-space:normal !important;
-}
 
-/* Badges & text bits */
+/* -------- Badges & labels -------- */
 .badge{
   display:inline-block;
   margin-left:6px;
@@ -1089,7 +1094,20 @@ td[style*="white-space:nowrap"]{
 .badge.watch{background:rgba(56,189,248,.18);color:#7dd3fc;}
 .badge.avoid{background:rgba(239,68,68,.18);color:#fca5a5;}
 .badge.flag{background:rgba(167,139,250,.24);color:#e9d5ff;}
+.badge.newsneg{background:rgba(248,113,113,.2);color:#fecaca;}
+.badge.newspos{background:rgba(22,163,74,.2);color:#bbf7d0;}
 
+.patternbadge{
+  display:inline-block;
+  margin-left:4px;
+  padding:2px 6px;
+  border-radius:999px;
+  font-size:11px;
+  background:rgba(94,234,212,.18);
+  color:#a5f3fc;
+}
+
+/* -------- Text helpers -------- */
 .code{
   font-variant-numeric:tabular-nums;
 }
@@ -1103,7 +1121,7 @@ td[style*="white-space:nowrap"]{
   color:#bfdbfe;
 }
 
-/* -------- Mini / spark charts (legacy) -------- */
+/* -------- Mini / spark charts (fallback width) -------- */
 .mini,
 .spark{
   display:block;
@@ -1112,7 +1130,84 @@ td[style*="white-space:nowrap"]{
   height:auto;
 }
 
-/* -------- Flex helpers & footer -------- */
+/* -------- Signals card layout -------- */
+.signals-list{
+  margin-top:10px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.signal-card{
+  border-radius:12px;
+  background:#020617;
+  padding:10px 11px 11px;
+  border:1px solid rgba(148,163,184,.4);
+}
+.signal-card-top{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  align-items:flex-start;
+}
+.signal-label{
+  display:inline-block;
+  font-size:11px;
+  padding:2px 7px;
+  border-radius:999px;
+  margin-bottom:4px;
+  background:rgba(148,163,184,.25);
+}
+.signal-label.buy{background:rgba(22,163,74,.2);color:#bbf7d0;}
+.signal-label.dca{background:rgba(245,158,11,.2);color:#fde68a;}
+.signal-label.watch{background:rgba(56,189,248,.2);color:#7dd3fc;}
+.signal-label.avoid{background:rgba(239,68,68,.2);color:#fecaca;}
+.signal-label.flag{background:rgba(167,139,250,.2);color:#e9d5ff;}
+
+.signal-name{
+  display:block;
+  font-size:12px;
+  color:var(--muted);
+}
+.signal-price{
+  text-align:right;
+  font-size:12px;
+}
+.signal-price .code{
+  font-size:14px;
+  font-weight:600;
+}
+
+.signal-metrics{
+  margin-top:6px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px 14px;
+  font-size:11px;
+}
+.signal-metrics .label{
+  color:var(--muted);
+  margin-right:4px;
+}
+.signal-metrics .value{
+  font-variant-numeric:tabular-nums;
+}
+
+.signal-comment{
+  margin-top:6px;
+  font-size:13px;
+}
+.signal-chart{
+  margin-top:6px;
+}
+.signal-chart .mini,
+.signal-chart .spark,
+.signal-chart iframe,
+.signal-chart div{
+  width:100% !important;
+  max-width:100%;
+}
+
+/* -------- Misc helpers -------- */
 .flex{
   display:flex;
   gap:8px;
@@ -1135,11 +1230,8 @@ td[style*="white-space:nowrap"]{
   }
 }
 
-/* -------- Desktop / tablet enhancements -------- */
+/* -------- Desktop / tablet -------- */
 @media (min-width: 900px){
-  body{
-    font-size:15px;
-  }
   .container{
     padding:18px 20px 40px;
   }
@@ -1153,7 +1245,6 @@ td[style*="white-space:nowrap"]{
   }
 }
 """
-
 
 
 SORT_JS = """
@@ -1205,8 +1296,19 @@ def panel_overview(title, df, badge_class):
 
     cards = []
     for _, r in df.iterrows():
-        # Safety: some rows might not have mini chart if something failed upstream
+        # Mini chart HTML
         mini_html = r.get('_mini_candle', '') or ''
+
+        # Re-use the existing per-row commentary you already build via comment_for_row(...)
+        comment = r.get('Comment') or ''
+
+        # Only show this prominently for WATCH bucket
+        comment_html = ""
+        if badge_class == 'watch' and comment:
+            comment_html = f"""
+  <div class="stock-card-comment desc">
+    {comment}
+  </div>"""
 
         cards.append(f"""
 <div class="stock-card">
@@ -1231,7 +1333,7 @@ def panel_overview(title, df, badge_class):
          <span class="value code">{r['Dist_to_52W_High_%']:.2f}%</span></div>
     <div><span class="label">→200DMA%</span>
          <span class="value code">{r['Dist_to_SMA200_%']:.2f}%</span></div>
-  </div>
+  </div>{comment_html}
 
   <div class="stock-card-chart">
     {mini_html}
@@ -1249,6 +1351,7 @@ def panel_overview(title, df, badge_class):
   </div>
 </div>
 """
+
 
 
 
@@ -1339,24 +1442,82 @@ for _, r in snaps_df.sort_values('Ticker').iterrows():
 tickers_html = make_table('tbl_tickers', ['Ticker', 'Name', 'Description'], ''.join(tick_rows))
 
 # Signals (with commentary)
-sig_rows = []
+# Signals (with commentary) — mobile-friendly card layout
+signal_cards = []
 for _, r in snaps_df.sort_values(['Signal', 'Ticker']).iterrows():
     pat = r.get('_pattern_name', '')
-    pat_txt = f" • Pattern: {pat} ({r.get('_pattern_status','')}, conf {r.get('_pattern_conf',np.nan)})" if pat else ''
-    sig_rows.append(f"""
-<tr>
-  <td>{r['Signal']}{' (auto)' if r.get('SignalAuto') else ''}</td><td><a class="ticker" href="#overview">{r['Ticker']}</a></td><td>{r['Name']}</td>
-  <td>{r['LastDate']}</td><td>{r['LastClose']:.4f}</td>
-  <td>{r['SMA20']:.4f}</td><td>{r['SMA50']:.4f}</td><td>{r['SMA200']:.4f}</td><td>{r['RSI14']:.2f}</td>
-  <td>{r['High52W']:.4f}</td><td>{r['Dist_to_52W_High_%']:.2f}%</td><td>{r['Dist_to_SMA200_%']:.2f}%</td>
-  <td>{r['Comment']}{pat_txt}</td>
-</tr>""")
+    pat_txt = (
+        f" • Pattern: {pat} ({r.get('_pattern_status','')}, "
+        f"conf {r.get('_pattern_conf', np.nan)})"
+        if pat else ''
+    )
+
+    sig_label = r.get('Signal', '') or 'N/A'
+    sig_auto = ' (auto)' if r.get('SignalAuto') else ''
+
+    # Decide badge colour bucket
+    bucket = (sig_label or '').split()[0].lower()
+    if bucket.startswith('buy'):
+        badge_cls = 'buy'
+    elif bucket.startswith('dca'):
+        badge_cls = 'dca'
+    elif bucket.startswith('watch'):
+        badge_cls = 'watch'
+    elif bucket.startswith('avoid') or bucket.startswith('sell'):
+        badge_cls = 'avoid'
+    else:
+        badge_cls = 'flag'
+
+    mini_html = r.get('_mini_candle', '') or ''
+
+    signal_cards.append(f"""
+<div class="signal-card">
+  <div class="signal-card-top">
+    <div>
+      <div class="signal-label {badge_cls}">{sig_label}{sig_auto}</div>
+      <a class="ticker" href="#overview">{r['Ticker']}</a>
+      <span class="signal-name">{r['Name']}</span>
+    </div>
+    <div class="signal-price">
+      <div class="code">{r['LastClose']:.4f}</div>
+      <div class="smallmuted">{r['LastDate']}</div>
+    </div>
+  </div>
+
+  <div class="signal-metrics">
+    <div><span class="label">RSI14</span>
+         <span class="value code">{r['RSI14']:.2f}</span></div>
+    <div><span class="label">→52W%</span>
+         <span class="value code">{r['Dist_to_52W_High_%']:.2f}%</span></div>
+    <div><span class="label">→200DMA%</span>
+         <span class="value code">{r['Dist_to_SMA200_%']:.2f}%</span></div>
+  </div>
+
+  <div class="signal-comment desc">
+    {r['Comment']}{pat_txt}
+  </div>
+
+  <div class="signal-chart">
+    {mini_html}
+  </div>
+</div>
+""")
+
 signals_html = f"""
-<div class="card"><div class="smallmuted"><b>Glossary:</b> SMA20/50/200 (golden cross=50&gt;200), EMA21, RSI14, 52W High, ATR(14). Distances are % from anchors. Commentary explains WHY each label applies; pattern hits include status & confidence. News from local PDFs is appended if recent (&le; {NEWS_WINDOW_DAYS}d).</div></div>
-{make_table('tbl_signals',
-            ['Signal','Ticker','Name','Last Date','Last Close','SMA20','SMA50','SMA200','RSI14','52W High','→52W%','→200DMA%','Comment'],
-            ''.join(sig_rows))}
+<div class="card">
+  <div class="smallmuted">
+    <b>Glossary:</b> SMAs are 20/50/200-day simple moving averages.
+    →52W% and →200DMA% are % distances from those anchors.
+    Commentary explains WHY each label was assigned.
+    ETF / News tags show exposure & recent news; 📰 appears if news is within the last
+    {NEWS_WINDOW_DAYS} days.
+  </div>
+</div>
+<div class="signals-list">
+  {''.join(signal_cards)}
+</div>
 """
+
 
 # Patterns
 pat_rows = []
