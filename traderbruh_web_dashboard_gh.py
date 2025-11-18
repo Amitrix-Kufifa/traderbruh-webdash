@@ -666,17 +666,24 @@ def parse_announcements():
     return pd.DataFrame(rows)
 
 # ---------------- Commentary ----------------
+def is_euphoria(r: pd.Series) -> bool:
+    """Detect 'euphoria zone' – late-stage, extended trend."""
+    d52 = r['Dist_to_52W_High_%']
+    d200 = r['Dist_to_SMA200_%']
+    rsi = r['RSI14']
+    # Tune these if you like, but this is a good starting point
+    return (d52 > -1.0) and (d200 > 20.0) and (rsi >= 70.0)
+
 def comment_for_row(r: pd.Series) -> str:
     d200 = r['Dist_to_SMA200_%']
     d52 = r['Dist_to_52W_High_%']
     rsi = r['RSI14']
     sig = str(r.get('Signal', '')).upper()
 
-    # Explicit signal buckets first
     if sig == 'BUY':
         return (
             f"Uptrend intact (close above 200DMA and prior 20-day breakout). "
-            f"RSI {rsi:.0f} is constructive, suggesting trend strength without being extremely overbought."
+            f"RSI {rsi:.0f} is constructive, showing strength without being extremely overbought."
         )
 
     if sig == 'DCA':
@@ -688,11 +695,23 @@ def comment_for_row(r: pd.Series) -> str:
     if sig == 'AVOID':
         return (
             f"Trend is weak/under pressure (Δ to 200DMA {d200:.1f}%). "
-            f"RSI {rsi:.0f} confirms lack of momentum — sidelines until it can reclaim the 200DMA or build a base."
+            f"RSI {rsi:.0f} confirms lack of momentum — stay on the sidelines until it can reclaim the 200DMA "
+            f"or build a proper base."
         )
 
     if sig == 'WATCH':
-        # Build a more narrative explanation for 'close to triggers'
+        # 🔥 EUPHORIA MODE
+        if is_euphoria(r):
+            return (
+                f"This is in a 'euphoria zone': price is within {abs(d52):.1f}% of its 52-week high, "
+                f"trading {d200:.1f}% above the 200DMA with RSI {rsi:.0f} showing very strong, overbought momentum. "
+                f"Existing holders: think about banking partial profits or at least tightening risk "
+                f"(e.g. stops just below the recent breakout area or short-term moving averages). "
+                f"New entries here are high-risk, late-trend trades; if you touch it, keep size small and define your "
+                f"invalidation level before buying."
+            )
+
+        # Normal WATCH — close to triggers but not full euphoria
         distance_bits = []
         if d52 > -2:
             distance_bits.append(f"within {abs(d52):.1f}% of its 52-week high")
@@ -715,14 +734,14 @@ def comment_for_row(r: pd.Series) -> str:
         return (
             f"{distance_part}, and {rsi_txt}. "
             f"Price is sitting near a potential inflection zone — keep it on watch for either a clean breakout "
-            f"through recent highs or a healthy pullback/retest before committing capital."
+            f"through recent highs or a healthy pullback/retest before committing fresh capital."
         )
 
     # Generic metric-based commentary for anything else
     if d52 > -2:
         return (
             f"Within {abs(d52):.1f}% of its 52-week high with an established uptrend. "
-            f"This is late in the move — best treated as a breakout/continuation setup rather than an early entry."
+            f"This is late in the move — better treated as a breakout/continuation setup than an early entry."
         )
 
     if d200 > 0 and not (45 <= rsi <= 70):
@@ -735,6 +754,7 @@ def comment_for_row(r: pd.Series) -> str:
         "Neutral setup — trend and momentum are not giving a strong edge yet; "
         "let more price action build the story before acting."
     )
+
 
 
 # ---------------- Build dataset ----------------
@@ -1144,12 +1164,19 @@ small,
 }
 
 /* -------- Badges & labels -------- */
+.badge.euphoria{
+  background:rgba(250,204,21,.16);
+  color:#facc15;
+  border:1px solid rgba(250,204,21,.4);
+}
+
 .badge{
   display:inline-block;
   margin-left:6px;
   padding:.15rem .45rem;
   border-radius:999px;
   font-size:11px;
+
 }
 .badge.buy{background:rgba(22,163,74,.18);color:#86efac;}
 .badge.dca{background:rgba(245,158,11,.18);color:#fde68a;}
@@ -1358,13 +1385,14 @@ def panel_overview(title, df, badge_class):
 
     cards = []
     for _, r in df.iterrows():
-        # Mini chart HTML
         mini_html = r.get('_mini_candle', '') or ''
-
-        # Re-use the existing per-row commentary you already build via comment_for_row(...)
         comment = r.get('Comment') or ''
+        euphoric = is_euphoria(r)
 
-        # Only show this prominently for WATCH bucket
+        euphoria_html = ""
+        if euphoric and badge_class == 'watch':
+            euphoria_html = '<span class="badge euphoria">EUPHORIA (existing holders)</span>'
+
         comment_html = ""
         if badge_class == 'watch' and comment:
             comment_html = f"""
@@ -1382,6 +1410,7 @@ def panel_overview(title, df, badge_class):
         {r['Ticker']}
       </a>
       <span class="badge {badge_class}">{badge_class.upper()}</span>
+      {euphoria_html}
     </div>
     <div class="stock-card-last code">{r['LastClose']:.4f}</div>
   </div>
@@ -1413,6 +1442,7 @@ def panel_overview(title, df, badge_class):
   </div>
 </div>
 """
+
 
 
 
@@ -1530,6 +1560,11 @@ for _, r in snaps_df.sort_values(['Signal', 'Ticker']).iterrows():
     else:
         badge_cls = 'flag'
 
+    euphoric = is_euphoria(r)
+    euphoria_label = ''
+    if euphoric:
+        euphoria_label = '<div class="signal-label flag">EUPHORIA (existing holders)</div>'
+
     mini_html = r.get('_mini_candle', '') or ''
 
     signal_cards.append(f"""
@@ -1537,9 +1572,11 @@ for _, r in snaps_df.sort_values(['Signal', 'Ticker']).iterrows():
   <div class="signal-card-top">
     <div>
       <div class="signal-label {badge_cls}">{sig_label}{sig_auto}</div>
+      {euphoria_label}
       <a class="ticker" href="#overview">{r['Ticker']}</a>
       <span class="signal-name">{r['Name']}</span>
     </div>
+
     <div class="signal-price">
       <div class="code">{r['LastClose']:.4f}</div>
       <div class="smallmuted">{r['LastDate']}</div>
