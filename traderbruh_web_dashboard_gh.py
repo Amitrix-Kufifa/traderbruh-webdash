@@ -678,6 +678,7 @@ def is_euphoria(r: pd.Series) -> bool:
     # - RSI >= 70 (overbought)
     return (d52 > -3.5) and (d200 > 50.0) and (rsi >= 70.0)
 
+# ---------------- Commentary ----------------
 def comment_for_row(r: pd.Series) -> str:
     d200 = r['Dist_to_SMA200_%']
     d52 = r['Dist_to_52W_High_%']
@@ -704,18 +705,16 @@ def comment_for_row(r: pd.Series) -> str:
         )
 
     if sig == 'WATCH':
-        # 🔥 EUPHORIA MODE
-        if is_euphoria(r):
+        # Euphoria zone for late-stage, extended trends
+        if (d52 > -3.5) and (d200 > 50.0) and (rsi >= 70.0):
             return (
-                f"This is in a 'euphoria zone': price is within {abs(d52):.1f}% of its 52-week high, "
-                f"trading {d200:.1f}% above the 200DMA with RSI {rsi:.0f} showing very strong, overbought momentum. "
-                f"Existing holders: think about banking partial profits or at least tightening risk "
-                f"(e.g. stops just below the recent breakout area or short-term moving averages). "
-                f"New entries here are high-risk, late-trend trades; if you touch it, keep size small and define your "
-                f"invalidation level before buying."
+                f"This is in a 'euphoria zone': price is only {abs(d52):.1f}% below its 52-week high, "
+                f"trading {d200:.1f}% above the 200DMA with RSI {rsi:.0f} in overbought territory. "
+                f"Existing holders: consider banking partial profits or tightening risk (e.g. stops below the recent "
+                f"breakout area or key short-term moving averages). New entries here are high-risk, late-trend trades — "
+                f"if you touch it, keep size small and define your invalidation before buying."
             )
 
-        # Normal WATCH — close to triggers but not full euphoria
         distance_bits = []
         if d52 > -2:
             distance_bits.append(f"within {abs(d52):.1f}% of its 52-week high")
@@ -734,7 +733,7 @@ def comment_for_row(r: pd.Series) -> str:
         else:
             rsi_txt = f"RSI {rsi:.0f} is still benign"
 
-        distance_part = ", ".join(distance_bits)
+        distance_part = ", ".join(distance_bits) if distance_bits else "Trend and momentum are mixed"
         return (
             f"{distance_part}, and {rsi_txt}. "
             f"Price is sitting near a potential inflection zone — keep it on watch for either a clean breakout "
@@ -758,7 +757,6 @@ def comment_for_row(r: pd.Series) -> str:
         "Neutral setup — trend and momentum are not giving a strong edge yet; "
         "let more price action build the story before acting."
     )
-
 
 
 # ---------------- Build dataset ----------------
