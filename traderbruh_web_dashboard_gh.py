@@ -671,8 +671,12 @@ def is_euphoria(r: pd.Series) -> bool:
     d52 = r['Dist_to_52W_High_%']
     d200 = r['Dist_to_SMA200_%']
     rsi = r['RSI14']
-    # Tune these if you like, but this is a good starting point
-    return (d52 > -1.0) and (d200 > 20.0) and (rsi >= 70.0)
+
+    # Looser, more realistic rule:
+    # - within ~3.5% of 52W high
+    # - >50% above 200DMA (very extended)
+    # - RSI >= 70 (overbought)
+    return (d52 > -3.5) and (d200 > 50.0) and (rsi >= 70.0)
 
 def comment_for_row(r: pd.Series) -> str:
     d200 = r['Dist_to_SMA200_%']
