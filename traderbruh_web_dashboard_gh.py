@@ -1,6 +1,6 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Web Dashboard for GitHub Pages (ASX TA)
-# UI Overhaul: Modern Dark/Glass Theme
+# UI Overhaul: Modern Dark/Glass Theme + Full Commentary
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -721,6 +721,12 @@ body {
     padding-top: 8px; border-top: 1px solid var(--border);
 }
 
+.playbook {
+    background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px;
+    margin-bottom: 16px; font-size: 13px; color: #e2e8f0; line-height: 1.6;
+}
+.playbook b { color: white; }
+
 /* Pills & Badges */
 .badge {
     padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; display: inline-block;
@@ -927,16 +933,15 @@ html = f"""<!DOCTYPE html>
         
         {"".join(html_cards)}
 
-                <h2 id="gate" style="margin-top:40px">Auto-DCA Candidates</h2>
+        <h2 id="gate" style="margin-top:40px">Auto-DCA Candidates</h2>
         <div class="card">
-            <div style="font-size:13px; color:var(--text-muted); margin-bottom:8px">
+            <div class="playbook">
                 <b>Playbook:</b> These are gap-down days that may suit <b>reaction</b> DCA adds, not blind dip-buying.
                 Focus on tickers where the gap is within the rule (Gap ≤ {RULES['autodca']['gap_thresh']}%),
                 the close has reclaimed the prior day's midpoint (<b>Reclaim Mid = Yes</b>), price is back above EMA21,
                 and a decent portion of the gap has already been filled. Typical approach: scale in 2–4 small adds into
                 strength <i>after</i> the reclaim, with a stop just under the gap low or recent swing low.
-            </div>
-            <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px">
+                <br><br>
                 <b>Translation:</b> you want proof that buyers are stepping back in and the gap is being absorbed —
                 not a knife that's still falling.
             </div>
@@ -957,9 +962,9 @@ html = f"""<!DOCTYPE html>
             </div>
         </div>
 
-                <h2 id="patterns" style="margin-top:40px">Patterns &amp; Structures</h2>
+        <h2 id="patterns" style="margin-top:40px">Patterns &amp; Structures</h2>
         <div class="card">
-            <div style="font-size:13px; color:var(--text-muted); margin-bottom:8px">
+            <div class="playbook">
                 <b>Playbook:</b> Only high-conviction, confirmed patterns in the recent window are shown.
                 Use them as <b>context</b> for your plan, not stand-alone signals. In broad strokes:
                 <br/><br/>
