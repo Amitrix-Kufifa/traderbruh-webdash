@@ -223,7 +223,7 @@ def label_row(r: pd.Series) -> str:
     if avoid: return 'AVOID'
     return 'WATCH'
 
-# Auto DCA & Pattern Logic (retained from previous)
+# Auto DCA & Pattern Logic
 def auto_dca_gate(ind: pd.DataFrame):
     if len(ind) < 3: return False, {'reason': 'insufficient data'}
     D0, D1, D2 = ind.iloc[-1], ind.iloc[-2], ind.iloc[-3]
@@ -366,6 +366,11 @@ def detect_flag(ind):
     tight = ch <= max(0.4 * (look['Close'].max() - look['Close'].min()), 0.02 * tail['Close'].iloc[-1])
     gentle = (-0.006 <= slope_pct <= 0.002)
     return (tight and gentle), {'hi': hi.tolist(), 'lo': lo.tolist(), 'win': win}
+
+def pattern_bias(name: str) -> str:
+    if name in ("Double Bottom", "Inverse H&S", "Ascending Triangle", "Bull Flag"): return "bullish"
+    if name in ("Double Top", "Head & Shoulders", "Descending Triangle"): return "bearish"
+    return "neutral"
 
 def breakout_ready_dt(ind: pd.DataFrame, pat: dict, rules: dict):
     if not pat or pat.get('name') != 'Double Top': return False, {}
