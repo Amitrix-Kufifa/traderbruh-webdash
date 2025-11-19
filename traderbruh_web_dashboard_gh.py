@@ -438,18 +438,83 @@ def is_euphoria(r: pd.Series) -> bool:
     return (r['Dist_to_52W_High_%'] > -3.5) and (r['Dist_to_SMA200_%'] > 50.0) and (r['RSI14'] >= 70.0)
 
 def comment_for_row(r: pd.Series) -> str:
-    d200, d52, rsi, sig = r['Dist_to_SMA200_%'], r['Dist_to_52W_High_%'], r['RSI14'], str(r.get('Signal', '')).upper()
-    
-    if sig == 'BUY': return f"Uptrend intact (close > 200DMA & High20). RSI {rsi:.0f} is constructive."
-    if sig == 'DCA': return f"Trading near 200DMA (Δ {d200:.1f}%), RSI {rsi:.0f} cooling. Good for accumulation."
-    if sig == 'AVOID': return f"Weak trend (Δ to 200DMA {d200:.1f}%). RSI {rsi:.0f}. Sidelines advised."
+    d200 = r['Dist_to_SMA200_%']
+    d52  = r['Dist_to_52W_High_%']
+    rsi  = r['RSI14']
+    sig  = str(r.get('Signal', '')).upper()
+
+    if sig == 'BUY':
+        return (
+            f"Uptrend intact (close above 200DMA and prior 20-day breakout). "
+            f"RSI {rsi:.0f} is constructive, showing strength without being extremely overbought."
+        )
+
+    if sig == 'DCA':
+        return (
+            f"Trading close to the 200DMA (Δ {d200:.1f}%), with RSI {rsi:.0f} cooling. "
+            f"Bias is positive but not urgent — better suited for staggered adds on controlled pullbacks."
+        )
+
+    if sig == 'AVOID':
+        return (
+            f"Trend is weak/under pressure (Δ to 200DMA {d200:.1f}%). "
+            f"RSI {rsi:.0f} confirms lack of momentum — stay on the sidelines until it can reclaim the 200DMA "
+            f"or build a proper base."
+        )
+
     if sig == 'WATCH':
-        if is_euphoria(r): return f"Euphoria zone: {abs(d52):.1f}% off high, {d200:.1f}% above 200DMA. Risk elevated."
-        dist_s = f"within {abs(d52):.1f}% of high" if d52 > -2 else (f"trading {d200:.1f}% above 200DMA" if d200 > 0 else f"{abs(d200):.1f}% below 200DMA")
-        return f"{dist_s}, RSI {rsi:.0f}. Near inflection point."
-    
-    if d52 > -2: return f"Near 52W high ({abs(d52):.1f}%). Breakout watch."
-    return "Neutral setup. Waiting for price structure."
+        # 🔥 EUPHORIA MODE
+        if is_euphoria(r):
+            return (
+                f"This is in a 'euphoria zone': price is only {abs(d52):.1f}% below its 52-week high, "
+                f"trading {d200:.1f}% above the 200DMA with RSI {rsi:.0f} in overbought territory. "
+                f"Existing holders: consider banking partial profits or tightening risk (e.g. stops below the recent "
+                f"breakout area or key short-term moving averages). New entries here are high-risk, late-trend trades — "
+                f"if you touch it, keep size small and define your invalidation before buying."
+            )
+
+        distance_bits = []
+        if d52 > -2:
+            distance_bits.append(f"within {abs(d52):.1f}% of its 52-week high")
+        elif d52 > -6:
+            distance_bits.append(f"only {abs(d52):.1f}% below the recent high zone")
+
+        if d200 > 0:
+            distance_bits.append(f"trading {d200:.1f}% above the 200DMA (uptrend still intact)")
+        else:
+            distance_bits.append(f"hovering {abs(d200):.1f}% below the 200DMA (trying to reclaim trend)")
+
+        if rsi >= 70:
+            rsi_txt = f"RSI {rsi:.0f} shows strong, possibly overbought momentum"
+        elif rsi >= 55:
+            rsi_txt = f"RSI {rsi:.0f} is constructive, not stretched"
+        else:
+            rsi_txt = f"RSI {rsi:.0f} is still benign"
+
+        distance_part = ", ".join(distance_bits) if distance_bits else "Trend and momentum are mixed"
+        return (
+            f"{distance_part}, and {rsi_txt}. "
+            f"Price is sitting near a potential inflection zone — keep it on watch for either a clean breakout "
+            f"through recent highs or a healthy pullback/retest before committing fresh capital."
+        )
+
+    # Fallbacks for anything else
+    if d52 > -2:
+        return (
+            f"Within {abs(d52):.1f}% of its 52-week high with an established uptrend. "
+            f"This is late in the move — better treated as a breakout/continuation setup than an early entry."
+        )
+
+    if d200 > 0 and not (45 <= rsi <= 70):
+        return (
+            f"Above the 200DMA (Δ {d200:.1f}%) but RSI {rsi:.0f} is not in the usual 45–70 trend zone. "
+            f"Momentum and trend are out of sync — wait for either better structure or clearer strength."
+        )
+
+    return (
+        "Neutral setup — trend and momentum are not giving a strong edge yet; "
+        "let more price action build the story before acting."
+    )
 
 # ---------------- Build dataset ----------------
 frames, snaps = [], []
@@ -579,6 +644,8 @@ body {
 .text-red { color: var(--accent-red); }
 .text-amber { color: var(--accent-amber); }
 .text-purple { color: var(--accent-purple); }
+.text-primary { color: var(--primary); }
+.text-main { color: var(--text-main); }
 .hidden { display: none !important; }
 
 /* Navigation */
@@ -793,7 +860,31 @@ kpi_html = f"""
 """
 
 # Auto DCA Table
-dca_rows = "".join([f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td class='mono text-red'>{r['AutoDCA_Gap_%']:.1f}%</td><td class='mono'>{r['AutoDCA_Fill_%']:.1f}%</td><td>{r['_mini_spark']}</td></tr>" for _, r in GATE.iterrows()])
+dca_rows = "".join([
+    "<tr class='searchable-item'>"
+    f"<td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
+    f"<td class='mono text-red'>{r['AutoDCA_Gap_%']:.1f}%</td>"
+    f"<td class='mono'>{'Yes' if r['AutoDCA_ReclaimMid'] else 'No'}</td>"
+    f"<td class='mono'>{'Yes' if r['AutoDCA_AboveEMA21'] else 'No'}</td>"
+    f"<td class='mono'>{r['AutoDCA_Fill_%']:.1f}%</td>"
+    f"<td>{r['_mini_spark']}</td>"
+    "</tr>"
+    for _, r in GATE.iterrows()
+])
+
+# Patterns Table
+pat_rows = "".join([
+    "<tr class='searchable-item'>"
+    f"<td>{r['_pattern_name']}</td>"
+    f"<td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
+    f"<td class='mono'>{r['_pattern_status']}</td>"
+    f"<td class='mono'>{r['_pattern_conf']:.2f}</td>"
+    f"<td class='mono'>{r['_pattern_align']}</td>"
+    f"<td>{r['_mini_candle']}</td>"
+    "</tr>"
+    for _, r in PATS.iterrows()
+])
+
 
 # News Table
 news_rows = "".join([f"<tr class='searchable-item'><td class='mono' style='color:var(--text-muted)'>{r['Date']}</td><td><b>{r['Ticker']}</b></td><td><span class='badge news'>{r['Type']}</span></td><td>{r['Headline']}</td></tr>" for _, r in news_df.sort_values('Date', ascending=False).iterrows()])
@@ -816,7 +907,9 @@ html = f"""<!DOCTYPE html>
             <a href="#dca" class="nav-link">DCA</a>
             <a href="#watch" class="nav-link">Watch</a>
             <a href="#gate" class="nav-link">Auto-Gate</a>
+            <a href="#patterns" class="nav-link">Patterns</a>
             <a href="#news" class="nav-link">News</a>
+
         </div>
     </div>
 
@@ -834,12 +927,66 @@ html = f"""<!DOCTYPE html>
         
         {"".join(html_cards)}
 
-        <h2 id="gate" style="margin-top:40px">Auto-DCA Candidates</h2>
-        <div class="card" style="padding:0">
+                <h2 id="gate" style="margin-top:40px">Auto-DCA Candidates</h2>
+        <div class="card">
+            <div style="font-size:13px; color:var(--text-muted); margin-bottom:8px">
+                <b>Playbook:</b> These are gap-down days that may suit <b>reaction</b> DCA adds, not blind dip-buying.
+                Focus on tickers where the gap is within the rule (Gap ≤ {RULES['autodca']['gap_thresh']}%),
+                the close has reclaimed the prior day's midpoint (<b>Reclaim Mid = Yes</b>), price is back above EMA21,
+                and a decent portion of the gap has already been filled. Typical approach: scale in 2–4 small adds into
+                strength <i>after</i> the reclaim, with a stop just under the gap low or recent swing low.
+            </div>
+            <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px">
+                <b>Translation:</b> you want proof that buyers are stepping back in and the gap is being absorbed —
+                not a knife that's still falling.
+            </div>
             <div class="table-responsive">
                 <table>
-                    <thead><tr><th>Ticker</th><th>Gap %</th><th>Fill %</th><th>Trend</th></tr></thead>
-                    <tbody>{dca_rows if dca_rows else "<tr><td colspan='4' style='text-align:center; color:var(--text-muted)'>No active setups today</td></tr>"}</tbody>
+                    <thead>
+                        <tr>
+                            <th>Ticker</th>
+                            <th>Gap %</th>
+                            <th>Reclaim Mid?</th>
+                            <th>&gt; EMA21?</th>
+                            <th>Gap-fill %</th>
+                            <th>Trend</th>
+                        </tr>
+                    </thead>
+                    <tbody>{dca_rows if dca_rows else "<tr><td colspan='6' style='text-align:center; color:var(--text-muted)'>No active setups today</td></tr>"}</tbody>
+                </table>
+            </div>
+        </div>
+
+                <h2 id="patterns" style="margin-top:40px">Patterns &amp; Structures</h2>
+        <div class="card">
+            <div style="font-size:13px; color:var(--text-muted); margin-bottom:8px">
+                <b>Playbook:</b> Only high-conviction, confirmed patterns in the recent window are shown.
+                Use them as <b>context</b> for your plan, not stand-alone signals. In broad strokes:
+                <br/><br/>
+                • <b>Ascending triangles / flat-top ranges</b> favour breakouts above resistance — look for strong closes
+                  through the neckline with volume, then place stops under the last swing low or back inside the range.<br/>
+                • <b>Double bottoms / basing structures</b> near support favour mean-reversion back into prior ranges —
+                  better entries are near the second low with evidence of rejection; invalidate if price breaks below the base.<br/>
+                • <b>Double tops / head &amp; shoulders / descending triangles</b> are topping/distribution patterns —
+                  for longs, that usually means tighten risk and stop adding rather than chase highs.
+                <br/><br/>
+                <b>Alignment</b> tells you whether the pattern bias agrees with the current signal bucket (BUY / DCA / WATCH / AVOID).
+                Bullish patterns aligned with BUY/DCA/WATCH can justify leaning into strength; bearish patterns in AVOID/extended names
+                argue for defence first.
+            </div>
+            <div class="table-responsive">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Pattern</th>
+                            <th>Ticker</th>
+                            <th>Status</th>
+                            <th>Confidence</th>
+                            <th>Alignment</th>
+                            <th>Mini</th>
+                        </tr>
+                    </thead>
+                    <tbody>{pat_rows if pat_rows else "<tr><td colspan='6' style='text-align:center; color:var(--text-muted)'>No high-confidence patterns right now.</td></tr>"}</tbody>
                 </table>
             </div>
         </div>
