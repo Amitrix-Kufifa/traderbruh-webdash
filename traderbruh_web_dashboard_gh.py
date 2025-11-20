@@ -1,6 +1,6 @@
 # traderbruh_global_ultimate.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 3.1 (Full Feature Parity + Multi-Market)
+# Version: Ultimate 3.2 (Bugfix: Pattern Rendering)
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -344,7 +344,7 @@ def detect_flag(ind):
     return (tight and -0.6 <= slope <= 0.2), {'hi': hi.tolist(), 'lo': lo.tolist(), 'win': 14}
 
 # ---------------- Visualization ----------------
-def mini_candle(ind, flag_info=None, pattern_lines=None):
+def mini_candle(ind, flag_info=None, pattern_data=None):
     v = ind.tail(MINI_BARS).copy()
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=v['Date'], open=v['Open'], high=v['High'], low=v['Low'], close=v['Close'], increasing_line_color='#4ade80', decreasing_line_color='#f87171'))
@@ -357,12 +357,20 @@ def mini_candle(ind, flag_info=None, pattern_lines=None):
         fig.add_trace(go.Scatter(x=t2['Date'], y=hi(x), mode='lines', line=dict(width=2, dash='dash', color='#a855f7')))
         fig.add_trace(go.Scatter(x=t2['Date'], y=lo(x), mode='lines', line=dict(width=2, dash='dash', color='#a855f7')))
     
-    if pattern_lines:
-        for ln in pattern_lines:
-            if ln[0] == 'h':
-                fig.add_trace(go.Scatter(x=[ln[1], ln[2]], y=[ln[3], ln[3]], mode='lines', line=dict(width=2, color='#facc15', dash='dot')))
-            elif ln[0] == 'seg':
-                fig.add_trace(go.Scatter(x=[ln[1], ln[3]], y=[ln[2], ln[4]], mode='lines', line=dict(width=2, color='#facc15')))
+    # BUGFIX: Check if pattern_data is a list of dicts (Full Objects) or list of tuples (Lines)
+    all_lines = []
+    if pattern_data:
+        if isinstance(pattern_data, list) and len(pattern_data) > 0 and isinstance(pattern_data[0], dict):
+            for p in pattern_data:
+                all_lines.extend(p.get('lines', []))
+        elif isinstance(pattern_data, list):
+            all_lines = pattern_data
+
+    for ln in all_lines:
+        if ln[0] == 'h':
+            fig.add_trace(go.Scatter(x=[ln[1], ln[2]], y=[ln[3], ln[3]], mode='lines', line=dict(width=2, color='#facc15', dash='dot')))
+        elif ln[0] == 'seg':
+            fig.add_trace(go.Scatter(x=[ln[1], ln[3]], y=[ln[2], ln[4]], mode='lines', line=dict(width=2, color='#facc15')))
 
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=130, width=280, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
     return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={'displayModeBar': False, 'staticPlot': True})
