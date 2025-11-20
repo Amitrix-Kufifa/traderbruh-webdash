@@ -1,6 +1,6 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Edition (ASX, US, INDIA)
-# Full Feature Set: Patterns + Fundamentals + Matrix Logic + Tabs
+# Features: Deep Fundamentals + Full Patterns + News Parsing + Tabbed UI
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -29,6 +29,7 @@ PATTERN_LOOKBACK = 180
 PIVOT_WINDOW = 4
 PRICE_TOL = 0.03
 PATTERNS_CONFIRMED_ONLY = True
+NEWS_WINDOW_DAYS = 14
 
 RULES = {
     'buy': {'rsi_min': 45, 'rsi_max': 70},
@@ -199,6 +200,48 @@ def fetch_deep_fundamentals(symbol: str):
         }
     except: return {'score': 0, 'tier': 'Error', 'roe_3y':0, 'margins':0, 'debt_eq':0, 'rev_cagr':0, 'is_buyback':False, 'fcf_yield':0, 'pe':0, 'cash': 0}
 
+# ---------------- News & Announcements (Restored) ----------------
+NEWS_TYPES = [
+    ('Appendix 3Y', r'Appendix\s*3Y|Change of Director.?s? Interest Notice', 'director'),
+    ('Appendix 2A', r'Appendix\s*2A|Application for quotation of securities', 'issue'),
+    ('Cleansing Notice', r'Cleansing Notice', 'issue'),
+    ('Price Query', r'Price Query|Aware Letter|Response to ASX Price Query', 'reg'),
+    ('Share Price Movement', r'Share Price Movement', 'reg'),
+    ('Trading Halt', r'Trading Halt', 'reg'),
+    ('Withdrawal', r'withdrawn', 'reg'),
+    ('Orders / Contracts', r'order|contract|sale|revenue|cash receipts', 'ops'),
+]
+
+def read_pdf_first_text(path: str):
+    if not HAVE_PYPDF: return ''
+    try: return re.sub(r'[ \t]+', ' ', PdfReader(path).pages[0].extract_text() or '')
+    except: return ''
+
+def parse_announcements():
+    rows = []
+    # Only runs if the folder exists. US/IN markets will just return empty if no files match.
+    if not os.path.isdir(ANN_DIR): return pd.DataFrame(columns=['Date', 'Ticker', 'Type', 'Tag', 'Headline', 'Path'])
+    for fp in sorted(glob.glob(os.path.join(ANN_DIR, '*.pdf'))):
+        fname = os.path.basename(fp)
+        m = re.match(r'([A-Z]{2,6})[_-]', fname) # Matches Ticker
+        ticker = m.group(1) if m else 'UNKNOWN'
+        text = read_pdf_first_text(fp)
+        
+        _type, tag = 'Announcement', 'gen'
+        for label, pat, t in NEWS_TYPES:
+            if re.search(pat, fname + " " + text, re.I):
+                _type, tag = label, t
+                break
+                
+        d = datetime.fromtimestamp(os.path.getmtime(fp), tz=SYD).replace(tzinfo=None)
+        # Try parse date from text
+        if (md := re.search(r'(\d{1,2}\s+[A-Za-z]{3,9}\s+20\d{2})', text)):
+            try: d = datetime.strptime(md.group(1), '%d %B %Y')
+            except: pass
+            
+        rows.append({'Date': d.date().isoformat(), 'Ticker': ticker, 'Type': _type, 'Tag': tag, 'Headline': _type, 'Path': fp})
+    return pd.DataFrame(rows)
+
 # ---------------- Indicators & Logic ----------------
 def indicators(df):
     x = df.copy().sort_values('Date').reset_index(drop=True)
@@ -208,7 +251,6 @@ def indicators(df):
     x['EMA21'] = x['Close'].ewm(span=21, adjust=False).mean()
     x['High20'] = x['High'].rolling(20).max()
     x['High52W'] = x['High'].rolling(252).max()
-    x['Vol20'] = x['Volume'].rolling(20).mean()
     
     chg = x['Close'].diff()
     gains = chg.clip(lower=0).rolling(14).mean()
@@ -234,7 +276,7 @@ def label_row(r):
     if avoid: return 'AVOID'
     return 'WATCH'
 
-# ---------------- Pattern Engine (Restored!) ----------------
+# ---------------- Pattern Engine (Full) ----------------
 def _pivots(ind, window=PIVOT_WINDOW):
     v = ind.tail(PATTERN_LOOKBACK).reset_index(drop=True).copy()
     ph = (v['High'] == v['High'].rolling(window * 2 + 1, center=True).max())
@@ -245,7 +287,6 @@ def _pivots(ind, window=PIVOT_WINDOW):
 def _similar(a, b, tol=PRICE_TOL): return (abs(a - b) / ((a+b)/2)) <= tol
 
 def detect_patterns(ind):
-    # Combined Pattern Detector to save space/time
     v = _pivots(ind)
     pats = []
     last_cls = v['Close'].iloc[-1]
@@ -261,7 +302,7 @@ def detect_patterns(ind):
                 neck = float(v.loc[li:lj, 'High'].max())
                 if last_cls > neck:
                     pats.append({'name': 'Double Bottom', 'status': 'confirmed', 'conf': 0.8, 'lines': [('h', v.loc[li,'Date'], v.loc[lj,'Date'], (p1+p2)/2), ('h', v.loc[li,'Date'], v['Date'].iloc[-1], neck)]})
-                    return pats
+                    return pats # Priority return
 
     # 2. Double Top
     highs = v.index[v['PH']].tolist()
@@ -276,7 +317,7 @@ def detect_patterns(ind):
                     pats.append({'name': 'Double Top', 'status': 'confirmed', 'conf': 0.8, 'lines': [('h', v.loc[hi,'Date'], v.loc[hj,'Date'], (p1+p2)/2), ('h', v.loc[hi,'Date'], v['Date'].iloc[-1], neck)]})
                     return pats
                     
-    # 3. Triangles
+    # 3. Ascending Triangle
     tail = v.tail(120).copy()
     phs, pls = tail[tail['PH']], tail[tail['PL']]
     if len(phs) >= 2 and len(pls) >= 2:
@@ -311,16 +352,32 @@ def pattern_bias(name):
     if name in ["Double Top"]: return "bearish"
     return "neutral"
 
-# ---------------- Visuals & Commentary ----------------
+def breakout_ready_dt(ind: pd.DataFrame, pat: dict, rules: dict):
+    if not pat or pat.get('name') != 'Double Top': return False, {}
+    last = ind.iloc[-1]
+    atr, vol, vol20 = float(last.get('ATR14', np.nan)), float(last.get('Volume', np.nan)), float(last.get('Vol20', np.nan))
+    ceiling = float(pat.get('levels', {}).get('ceiling', np.nan))
+    if not (np.isfinite(atr) and np.isfinite(vol) and np.isfinite(vol20) and np.isfinite(ceiling)): return False, {}
+    close = float(last['Close'])
+    ok_price = (close >= ceiling * (1.0 + rules['buffer_pct'])) and (close >= ceiling + rules['atr_mult'] * atr)
+    ok_vol   = (vol20 > 0) and (vol >= rules['vol_mult'] * vol20)
+    return bool(ok_price and ok_vol), {'ceiling': round(ceiling, 4), 'atr': round(atr, 4), 'stop': round(close - atr, 4)}
+
 def mini_candle(ind, flag_info=None, pat_lines=None):
     v = ind.tail(MINI_BARS).copy()
     fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=v['Date'], open=v['Open'], high=v['High'], low=v['Low'], close=v['Close'], hoverinfo='skip', showlegend=False))
-    fig.add_trace(go.Scatter(x=v['Date'], y=v['SMA20'], mode='lines', line=dict(width=1, color='rgba(56,189,248,0.6)'), hoverinfo='skip', showlegend=False))
-    
+    fig.add_trace(go.Candlestick(x=v['Date'], open=v['Open'], high=v['High'], low=v['Low'], close=v['Close'], hoverinfo='skip', showlegend=False, increasing_line_color='#4ade80', decreasing_line_color='#f87171'))
+    if 'SMA20' in v.columns:
+        fig.add_trace(go.Scatter(x=v['Date'], y=v['SMA20'], mode='lines', line=dict(width=1.4, color='rgba(56,189,248,0.8)'), hoverinfo='skip', showlegend=False))
+    if flag_info:
+        t2 = ind.tail(max(flag_info.get('win', 14), 8)).copy()
+        x = np.arange(len(t2))
+        hi, lo = np.poly1d(flag_info['hi']), np.poly1d(flag_info['lo'])
+        for line_data in [hi(x), lo(x)]:
+            fig.add_trace(go.Scatter(x=t2['Date'], y=line_data, mode='lines', line=dict(width=2, dash='dash', color='rgba(167,139,250,0.95)'), hoverinfo='skip', showlegend=False))
     if pat_lines:
-        for (k, d1, d2, y) in pat_lines:
-             fig.add_trace(go.Scatter(x=[d1, d2], y=[y, y], mode='lines', line=dict(width=2, color='rgba(234,179,8,0.9)', dash='dot'), hoverinfo='skip', showlegend=False))
+        for ln in pat_lines:
+            if ln[0] == 'h': _, d1, d2, y = ln; fig.add_trace(go.Scatter(x=[d1, d2], y=[y, y], mode='lines', line=dict(width=2, color='rgba(234,179,8,0.9)', dash='dot'), hoverinfo='skip', showlegend=False))
     
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=120, width=260, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
     return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={'displayModeBar': False, 'staticPlot': True})
@@ -344,6 +401,7 @@ def comment_for_row(r):
 
 # ---------------- Main Execution ----------------
 all_market_html = ""
+news_df_all = parse_announcements() # Load ASX announcements once
 
 for mkt_code, config in MARKETS.items():
     print(f"--- Processing {config['name']} ---")
@@ -376,10 +434,15 @@ for mkt_code, config in MARKETS.items():
             'Fundy_Score': fundy['score'], 'Fundy_Tier': fundy['tier'],
             'Fundy_ROE': fundy['roe_3y'], 'Fundy_Margin': fundy['margins'], 'Fundy_PE': fundy['pe'],
             'Fundy_Debt': fundy['debt_eq'], 'Fundy_Cash': fundy['cash'],
-            'Flag': flag_flag, 'Gate': gate_flag, 'Gate_Gap': gate_det.get('gap_pct', 0),
-            'Pattern': pname
+            'Flag': flag_flag, 'Gate': gate_flag, 'Pattern': pname
         }
         r['Comment'] = comment_for_row(r)
+        
+        # Attach News (If ASX)
+        news_hit = news_df_all[news_df_all['Ticker'] == ticker]
+        if not news_hit.empty:
+             r['Comment'] += f" • 📰 Recent News: {len(news_hit)} items."
+
         r['_mini_candle'] = mini_candle(ind, flag_det if flag_flag else None, pat_lines)
         rows.append(r)
     
@@ -424,12 +487,32 @@ for mkt_code, config in MARKETS.items():
     def fmt_pct(x): return f"{x*100:.1f}%" if x else "-"
     f_rows = "".join([f"<tr><td><b>{r['Ticker']}</b></td><td>{r['Fundy_Score']}</td><td class='mono'>{fmt_pct(r['Fundy_ROE'])}</td><td class='mono'>{fmt_pct(r['Fundy_Margin'])}</td><td class='mono'>{r['Fundy_PE'] if r['Fundy_PE'] else '-'}</td><td class='mono'>{r['Fundy_Debt']:.2f}</td></tr>" for _, r in df_mkt.sort_values('Fundy_Score', ascending=False).iterrows()])
 
+    # News Table (Only relevant if populated)
+    news_html = ""
+    if not news_df_all.empty and mkt_code == 'AU':
+        n_rows = "".join([f"<tr><td>{n['Date']}</td><td><b>{n['Ticker']}</b></td><td>{n['Type']}</td><td>{n['Headline']}</td></tr>" for _, n in news_df_all.sort_values('Date', ascending=False).iterrows()])
+        news_html = f"<h3 style='margin-top:40px'>Local Announcements</h3><div class='card'><div class='table-responsive'><table><thead><tr><th>Date</th><th>Ticker</th><th>Type</th><th>Headline</th></tr></thead><tbody>{n_rows}</tbody></table></div></div>"
+
+    # Playbook Block (Restored)
+    playbook_html = """
+    <div class="playbook">
+        <b>The "TraderBruh Shield" (0-10 Score):</b><br>
+        • <b>Profitability (3 pts):</b> ROE > 15% (Efficiency), Margins > 15% (Pricing Power).<br>
+        • <b>Survival (3 pts):</b> Low Debt/Equity (<0.5), High Current Ratio (>1.5).<br>
+        • <b>Growth/Val (2 pts):</b> Rev Growth > 10%, PEG < 2.<br><br>
+        💎 <b>High Quality (Score 7-10):</b> Fortress balance sheets. OK to DCA dips or size up.<br>
+        ⚠️ <b>Speculative/Junk (Score 0-3):</b> Weak fundamentals. If TA says "Buy", use tight stops.
+    </div>
+    """
+
     all_market_html += f"""
     <div id="tab-{mkt_code}" class="market-tab-content" style="display:{'block' if mkt_code=='AU' else 'none'}">
         <div style="margin-bottom:20px"><h1 style="font-size:24px; margin:0">{config['name']} Overview</h1></div>
+        {playbook_html}
         {grid_html}
         <h3 style="margin-top:40px">Fundamental Health</h3>
         <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>ROE</th><th>Margin</th><th>P/E</th><th>Debt/Eq</th></tr></thead><tbody>{f_rows}</tbody></table></div></div>
+        {news_html}
     </div>"""
 
 # ---------------- CSS/JS & Export ----------------
@@ -449,11 +532,14 @@ body { background:var(--bg); color:var(--text); font-family:sans-serif; margin:0
 .badge.buy { background:rgba(16,185,129,0.2); color:#34d399; }
 .badge.dca { background:rgba(245,158,11,0.2); color:#fbbf24; }
 .badge.watch { background:rgba(59,130,246,0.2); color:#60a5fa; }
+.badge.avoid { background:rgba(239,68,68,0.2); color:#f87171; }
 .badge.shield-high { background:rgba(16,185,129,0.2); color:#34d399; border:1px solid #34d399; }
 .badge.shield-low { background:rgba(239,68,68,0.2); color:#f87171; border:1px solid #f87171; }
+.badge.news { background:rgba(168, 85, 247, 0.2); color:#c084fc; }
 .metrics-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; background:rgba(0,0,0,0.2); padding:8px; border-radius:8px; margin-bottom:10px; font-size:12px; }
 .metric label { display:block; color:var(--muted); font-size:10px; }
 .comment-box { font-size:13px; line-height:1.4; color:#cbd5e1; margin-bottom:10px; }
+.playbook { background:rgba(0,0,0,0.2); padding:12px; border-radius:8px; margin-bottom:16px; font-size:13px; color:#e2e8f0; line-height:1.6; }
 table { width:100%; border-collapse:collapse; font-size:13px; }
 th { text-align:left; padding:8px; color:var(--muted); border-bottom:1px solid rgba(255,255,255,0.1); }
 td { padding:8px; border-bottom:1px solid rgba(255,255,255,0.05); }
