@@ -1,6 +1,6 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Web Dashboard for GitHub Pages (ASX TA + Deep Fundamentals)
-# Version: Ultimate 2.0 (Buffett/Piotroski Logic)
+# Version: Ultimate 2.1 (Syntax Fixed & Stabilized)
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -47,6 +47,16 @@ BREAKOUT_RULES = {
     'buffer_pct': 0.003,
 }
 AUTO_UPGRADE_BREAKOUT = True
+
+# Fundamental Rules (Buffett/Piotroski-lite)
+FUNDY_THRESHOLDS = {
+    'roe_high': 0.15, 'roe_mid': 0.10,
+    'margin_high': 0.15, 'margin_mid': 0.08,
+    'de_safe': 0.50, 'de_risky': 1.50,
+    'curr_ratio': 1.5,
+    'peg_fair': 2.0,
+    'fcf_yield': 0.03
+}
 
 COMPANY_META = {
     'CSL': ('CSL Limited', 'Biotech: vaccines, plasma & specialty therapies.'),
@@ -626,8 +636,7 @@ for t, y in UNIVERSE:
         # Fundamentals
         'Fundy_Score': fundy['score'], 'Fundy_Tier': fundy['tier'], 'Fundy_ROE': fundy['roe_3y'],
         'Fundy_Margin': fundy['margins'], 'Fundy_PE': fundy['pe'], 'Fundy_RevCAGR': fundy['rev_cagr'],
-        'Fundy_Growth': fundy['rev_cagr'], # Alias for backwards compatibility if needed
-        'Fundy_Debt': fundy['debt_eq'], 'Fundy_Buyback': fundy['is_buyback']
+        'Fundy_Growth': fundy['rev_cagr'], 'Fundy_Cash': fundy['cash'], 'Fundy_Debt': 0 if fundy['debt_eq'] == 999 else fundy['debt_eq']
     })
 
 prices_all = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -794,7 +803,7 @@ def render_card(r, badge_type):
     
     # Fundamental Badge
     score = r['Fundy_Score']
-    s_badge = "shield-high" if score >= 7 else ("shield-low" if score <= 3 else "buy") # using existing colors for mid
+    s_badge = "shield-high" if score >= 7 else ("shield-low" if score <= 3 else "buy") 
     s_icon = "💎" if score == 10 else ("🛡️" if score >= 7 else ("⚠️" if score <= 3 else "⚖️"))
     fundy_html = f'<span class="badge {s_badge}" style="margin-left:6px">{s_icon} {score}/10 {r["Fundy_Tier"]}</span>'
 
@@ -848,12 +857,135 @@ dca_rows = "".join([f"<tr class='searchable-item'><td><span class='ticker-badge 
 pat_rows = "".join([f"<tr class='searchable-item'><td>{r['_pattern_name']}</td><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td class='mono'>{r['_pattern_status']}</td><td class='mono'>{r['_pattern_conf']:.2f}</td><td class='mono'>{r['_pattern_align']}</td><td>{r['_mini_candle']}</td></tr>" for _, r in PATS.iterrows()])
 news_rows = "".join([f"<tr class='searchable-item'><td class='mono' style='color:var(--text-muted)'>{r['Date']}</td><td><b>{r['Ticker']}</b></td><td><span class='badge news'>{r['Type']}</span></td><td>{r['Headline']}</td></tr>" for _, r in news_df.sort_values('Date', ascending=False).iterrows()])
 
-# Fundy Rows
+# Fundy Rows - Safe Construction
 def fmt_pe(x): return f"{x:.1f}" if x and x > 0 else "-"
 def fmt_pct(x): return f"{x*100:.1f}%" if x else "-"
-fundy_rows = "".join([
-    f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
-    f"<td><span class='badge {'shield-high' if r['Fundy_Score']>=7 else ('shield-low' if r['Fundy_Score']<=3 else 'watch')}'>{r['Fundy_Score']}/10 {r['Fundy_Tier']}</span></td>"
-    f"<td class='mono'>{fmt_pct(r['Fundy_ROE'])}</td>"
-    f"<td class='mono'>{fmt_pct(r['Fundy_Margin'])}</td>"
-    f"<td
+fundy_rows_list = []
+for _, r in snaps_df.sort_values('Fundy_Score', ascending=False).iterrows():
+    score = r['Fundy_Score']
+    if score >= 7: b_cls = 'shield-high'
+    elif score <= 3: b_cls = 'shield-low'
+    else: b_cls = 'watch'
+    
+    row = (
+        f"<tr class='searchable-item'>"
+        f"<td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
+        f"<td><span class='badge {b_cls}'>{score}/10 {r['Fundy_Tier']}</span></td>"
+        f"<td class='mono'>{fmt_pct(r['Fundy_ROE'])}</td>"
+        f"<td class='mono'>{fmt_pct(r['Fundy_Margin'])}</td>"
+        f"<td class='mono'>{fmt_pe(r['Fundy_PE'])}</td>"
+        f"<td class='mono'>{fmt_pct(r['Fundy_RevCAGR'])}</td>"
+        f"<td class='mono'>{r['Fundy_Debt']:.2f}</td>"
+        f"</tr>"
+    )
+    fundy_rows_list.append(row)
+fundy_rows = "".join(fundy_rows_list)
+
+html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TraderBruh Dashboard</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>{CSS}</style>
+    <script>{JS}</script>
+</head>
+<body>
+    <div class="nav-wrapper">
+        <div class="nav-inner">
+            <a href="#" class="nav-link active" style="font-weight:700; color:white">TraderBruh</a>
+            <a href="#buy" class="nav-link">Buy</a>
+            <a href="#dca" class="nav-link">DCA</a>
+            <a href="#watch" class="nav-link">Watch</a>
+            <a href="#fundy" class="nav-link">Fundamentals</a>
+            <a href="#gate" class="nav-link">Auto-Gate</a>
+            <a href="#patterns" class="nav-link">Patterns</a>
+            <a href="#news" class="nav-link">News</a>
+        </div>
+    </div>
+
+    <div class="search-container">
+        <input type="text" id="globalSearch" class="search-input" placeholder="Search tickers, signals, or patterns...">
+    </div>
+
+    <div class="container">
+        <div style="margin-bottom:20px">
+            <h1 style="font-size:24px; margin:0 0 4px 0">Market Overview</h1>
+            <div style="color:var(--text-muted); font-size:13px">ASX Technical Analysis & Fundamentals • Updated {datetime.now(SYD).strftime('%I:%M %p %Z')}</div>
+        </div>
+        
+        {kpi_html}
+        {"".join(html_cards)}
+
+        <h2 id="fundy" style="margin-top:40px">Fundamental Health Check</h2>
+        <div class="card">
+            <div class="playbook">
+                <b>The "TraderBruh Shield" (0-10 Score):</b><br>
+                Separating "Compounders" from "Garbage" using Buffett/Quality principles.<br><br>
+                <b>Metrics Tracked (Max 10 pts):</b><br>
+                • <b>Profitability (3 pts):</b> ROE > 15% (Efficiency), Margins > 15% (Pricing Power).<br>
+                • <b>Survival (3 pts):</b> Low Debt/Equity (<0.5), High Current Ratio (>1.5), Interest Coverage.<br>
+                • <b>Cash/Capital (2 pts):</b> FCF Yield & Dividends.<br>
+                • <b>Growth/Val (2 pts):</b> Rev Growth > 10%, PEG < 2.<br><br>
+                <b>The Matrix:</b><br>
+                💎 <b>High Quality (Score 7-10):</b> Fortress balance sheets. OK to DCA dips or size up on breakouts.<br>
+                ⚠️ <b>Speculative/Junk (Score 0-3):</b> Weak fundamentals. If TA says "Buy", use tight stops. If TA says "DCA", <b>AVOID</b> (Falling Knife).
+            </div>
+            <div class="table-responsive">
+                <table>
+                    <thead><tr><th>Ticker</th><th>Quality Score</th><th>ROE</th><th>Margin</th><th>P/E</th><th>Rev Growth</th><th>Debt/Eq</th></tr></thead>
+                    <tbody>{fundy_rows}</tbody>
+                </table>
+            </div>
+        </div>
+
+        <h2 id="gate" style="margin-top:40px">Auto-DCA Candidates</h2>
+        <div class="card">
+            <div class="playbook">
+                <b>Playbook:</b> Gap-down reaction setups. Focus on tickers where the gap is small (≤ {RULES['autodca']['gap_thresh']}%),
+                close reclaimed the prior midpoint, and price is above EMA21. Scale in small.
+            </div>
+            <div class="table-responsive">
+                <table>
+                    <thead><tr><th>Ticker</th><th>Gap %</th><th>Reclaim Mid?</th><th>&gt; EMA21?</th><th>Gap-fill %</th><th>Trend</th></tr></thead>
+                    <tbody>{dca_rows if dca_rows else "<tr><td colspan='6' style='text-align:center; color:var(--text-muted)'>No active setups today</td></tr>"}</tbody>
+                </table>
+            </div>
+        </div>
+
+        <h2 id="patterns" style="margin-top:40px">Patterns &amp; Structures</h2>
+        <div class="card">
+            <div class="playbook">
+                <b>Playbook:</b> High-conviction patterns (last {PATTERN_LOOKBACK} days). Use for context.<br>
+                • <b>Bullish:</b> Ascending Triangles, Double Bottoms.<br>
+                • <b>Bearish:</b> Double Tops, Head & Shoulders.<br>
+                Check <b>Alignment</b> with the trend bucket (BUY/DCA vs AVOID).
+            </div>
+            <div class="table-responsive">
+                <table>
+                    <thead><tr><th>Pattern</th><th>Ticker</th><th>Status</th><th>Confidence</th><th>Alignment</th><th>Mini</th></tr></thead>
+                    <tbody>{pat_rows if pat_rows else "<tr><td colspan='6' style='text-align:center; color:var(--text-muted)'>No patterns right now.</td></tr>"}</tbody>
+                </table>
+            </div>
+        </div>
+
+        <h2 id="news" style="margin-top:40px">Recent Announcements</h2>
+        <div class="card" style="padding:0">
+            <div class="table-responsive">
+                <table>
+                    <thead><tr><th>Date</th><th>Ticker</th><th>Type</th><th>Detail</th></tr></thead>
+                    <tbody>{news_rows}</tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div style="text-align:center; margin-top:40px; color:var(--text-muted); font-size:12px">Generated by TraderBruh • Not Financial Advice</div>
+    </div>
+</body>
+</html>
+"""
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+with open(OUTPUT_HTML, 'w', encoding='utf-8') as f: f.write(html)
+print('Done:', OUTPUT_HTML)
