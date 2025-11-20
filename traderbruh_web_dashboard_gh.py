@@ -1,6 +1,6 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Web Dashboard for GitHub Pages (ASX TA + Deep Fundamentals)
-# Version: Ultimate (Buffett/Quality Shield Integration)
+# Version: Ultimate 2.0 (Buffett/Piotroski Logic)
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -48,16 +48,6 @@ BREAKOUT_RULES = {
 }
 AUTO_UPGRADE_BREAKOUT = True
 
-# Fundamental Rules (Buffett/Piotroski-lite)
-FUNDY_THRESHOLDS = {
-    'roe_high': 0.15, 'roe_mid': 0.10,
-    'margin_high': 0.15, 'margin_mid': 0.08,
-    'de_safe': 0.50, 'de_risky': 1.50,
-    'curr_ratio': 1.5,
-    'peg_fair': 2.0,
-    'fcf_yield': 0.03
-}
-
 COMPANY_META = {
     'CSL': ('CSL Limited', 'Biotech: vaccines, plasma & specialty therapies.'),
     'COH': ('Cochlear Limited', 'Implantable hearing devices leader.'),
@@ -92,7 +82,7 @@ COMPANY_META = {
 }
 UNIVERSE = [(t, f'{t}.AX') for t in COMPANY_META.keys()]
 
-# ---------------- Data Fetching (TA + FA) ----------------
+# ---------------- Data Fetching (TA + Deep FA) ----------------
 def fetch_prices(symbol: str) -> pd.DataFrame:
     """Fetch OHLCV history."""
     df = yf.download(symbol, period=f'{FETCH_DAYS}d', interval='1d', auto_adjust=False, progress=False, group_by='column', prepost=False)
@@ -130,91 +120,126 @@ def fetch_prices(symbol: str) -> pd.DataFrame:
     df['Date'] = df['Date'].dt.tz_convert(SYD).dt.tz_localize(None)
     return df.dropna(subset=['Close'])
 
-def fetch_fundamentals(symbol: str):
+def fetch_deep_fundamentals(symbol: str):
     """
-    Fetch comprehensive fundamentals to build a 0-10 Quality Score.
-    Focus: Profitability, Leverage, Cash Flow, Valuation.
+    Performs a deep dive into Financial Statements (Income, Balance Sheet, Cash Flow).
+    Calculates a 'Buffett/Piotroski' Quality Score (0-10).
     """
     try:
         tick = yf.Ticker(symbol)
         info = tick.info
         
-        # Safely extract with defaults
-        data = {
-            'roe': info.get('returnOnEquity', 0) or 0,
-            'margins': info.get('profitMargins', 0) or 0,
-            'curr_ratio': info.get('currentRatio', 0) or 0,
-            'debt_eq': info.get('debtToEquity', 0) or 999, # 999 if missing (assume risky)
-            'cash': info.get('totalCash', 0) or 0,
-            'fcf': info.get('freeCashflow', 0) or 0,
-            'rev_growth': info.get('revenueGrowth', 0) or 0,
-            'peg': info.get('pegRatio', 0), 
-            'pe': info.get('trailingPE', 0), 
-            'mcap': info.get('marketCap', 1) or 1,
-            'div_yield': info.get('dividendYield', 0) or 0
-        }
-        
-        # Convert Debt/Equity from % to Ratio if YF returns it as e.g. 45.0 (45%) vs 0.45
-        # YF usually returns DebtToEquity as a percentage (e.g., 50 means 50%), so we divide by 100 for ratio calc
-        # But let's handle standard ratio logic: < 0.5 is good.
-        if data['debt_eq'] > 10: data['debt_eq'] = data['debt_eq'] / 100.0
+        # Fetch Statements (DataFrame)
+        # We wrap these in try/except because YF sometimes fails on specific tables
+        try:
+            bs = tick.balance_sheet  # Balance Sheet
+            is_ = tick.income_stmt   # Income Statement
+            cf = tick.cashflow       # Cash Flow
+        except:
+            bs, is_, cf = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-        # --- Scoring Engine (0-10) ---
+        # --- Helpers to safely get latest or 3Y avg ---
+        def get_item(df, item_names, idx=0):
+            # item_names can be a list of potential keys (YF keys change often)
+            if df.empty: return 0
+            for name in item_names:
+                if name in df.index:
+                    try: return float(df.loc[name].iloc[idx])
+                    except: return 0
+            return 0
+
+        def get_cagr(df, item_names, years=3):
+            if df.empty or df.shape[1] < years: return 0
+            curr = get_item(df, item_names, 0)
+            past = get_item(df, item_names, years-1)
+            if past <= 0 or curr <= 0: return 0
+            return (curr / past)**(1/(years-1)) - 1
+
+        # --- 1. Profitability & Efficiency (3 pts) ---
+        # ROE 3Y Average (Net Income / Stockholders Equity)
+        roe_3y = 0
+        try:
+            if not is_.empty and not bs.empty:
+                roes = []
+                for i in range(min(3, len(is_.columns), len(bs.columns))):
+                    ni = get_item(is_, ['Net Income'], i)
+                    eq = get_item(bs, ['Stockholders Equity', 'Total Equity Gross Minority Interest'], i)
+                    if eq > 0: roes.append(ni/eq)
+                if roes: roe_3y = sum(roes) / len(roes)
+        except: pass
+
+        # Cash Conversion (Is OCF > Net Income? - Earnings Quality)
+        ocf = get_item(cf, ['Operating Cash Flow', 'Total Cash From Operating Activities'])
+        net_inc = get_item(is_, ['Net Income'])
+        high_quality_earnings = (ocf > net_inc)
+
+        # Margin Trend
+        marg_curr = info.get('profitMargins', 0)
+        
         score = 0
-        
-        # A. Profitability & Efficiency (Max 3)
-        # 1. ROE - The compounder proxy
-        if data['roe'] > FUNDY_THRESHOLDS['roe_high']: score += 2
-        elif data['roe'] > FUNDY_THRESHOLDS['roe_mid']: score += 1
-        
-        # 2. Margins - Pricing power
-        if data['margins'] > FUNDY_THRESHOLDS['margin_high']: score += 1
-        
-        # B. Balance Sheet & Survival (Max 3)
-        # 3. Leverage (Debt/Equity)
-        if data['debt_eq'] < FUNDY_THRESHOLDS['de_safe']: score += 1
-        
-        # 4. Liquidity (Current Ratio)
-        if data['curr_ratio'] > FUNDY_THRESHOLDS['curr_ratio']: score += 1
-        
-        # 5. Net Cash position check
-        # If Debt/Eq is high but they have massive cash covering debt, give a point back
-        total_debt = info.get('totalDebt', 0) or 0
-        if data['cash'] > total_debt: score += 1
+        if roe_3y > 0.15: score += 2 # Buffett's Gold Standard
+        elif roe_3y > 0.10: score += 1
+        if marg_curr > 0.10: score += 1
+        if high_quality_earnings: score += 0.5 # Bonus for real cash
 
-        # C. Cash & Allocation (Max 2)
-        # 6. Free Cash Flow Yield
-        fcf_yield = data['fcf'] / data['mcap']
-        if fcf_yield > FUNDY_THRESHOLDS['fcf_yield']: score += 1
-        elif data['fcf'] > 0: score += 0.5
-        
-        # 7. Shareholder Yield (Divs) - Basic check
-        if data['div_yield'] > 0.02: score += 1
-        elif data['div_yield'] > 0: score += 0.5
+        # --- 2. Balance Sheet Health (3 pts) ---
+        curr_ratio = info.get('currentRatio', 0)
+        debt_eq = info.get('debtToEquity', 999)
+        if debt_eq > 50: debt_eq = debt_eq / 100.0 # Normalize YF percentage
 
-        # D. Growth & Valuation (Max 2)
-        # 8. Growth
-        if data['rev_growth'] > 0.10: score += 1
+        cash = get_item(bs, ['Cash And Cash Equivalents', 'Cash Financial'])
+        lt_debt = get_item(bs, ['Long Term Debt'])
         
-        # 9. Valuation (PEG or PE)
-        val_ok = False
-        if data['peg'] and 0 < data['peg'] < FUNDY_THRESHOLDS['peg_fair']: val_ok = True
-        elif data['pe'] and 0 < data['pe'] < 25: val_ok = True
-        if val_ok: score += 1
+        if cash > lt_debt: score += 1.5 # Fortress: Cash covers long term debt
+        elif debt_eq < 0.5: score += 1
         
-        # Cap Score at 10
-        score = min(score, 10)
-        data['score'] = round(score, 1)
+        if curr_ratio > 1.5: score += 1 # Strong liquidity
+        elif curr_ratio > 1.1: score += 0.5
+
+        # --- 3. Capital Allocation (2 pts) ---
+        # Dilution Check: Shares Outstanding Trend
+        shares_curr = get_item(bs, ['Share Issued', 'Ordinary Shares Number'], 0)
+        shares_old = get_item(bs, ['Share Issued', 'Ordinary Shares Number'], 2)
         
-        # Tier Label
-        if score >= 7: data['tier'] = 'Fortress'
-        elif score >= 4: data['tier'] = 'Quality'
-        elif score >= 2: data['tier'] = 'Spec'
-        else: data['tier'] = 'Junk'
-            
-        return data
-    except Exception:
-        return {'roe':0, 'margins':0, 'curr_ratio':0, 'debt_eq':0, 'cash':0, 'fcf':0, 'rev_growth':0, 'peg':0, 'pe':0, 'mcap':1, 'div_yield':0, 'score':0, 'tier':'Unknown'}
+        is_buyback = False
+        if shares_old > 0:
+            change = (shares_curr - shares_old) / shares_old
+            if change < -0.01: score += 1.5; is_buyback = True # Buying back shares (Gold)
+            elif change < 0.05: score += 1 # Stable (No major dilution)
+        
+        # --- 4. Growth & Valuation (2 pts) ---
+        rev_cagr = get_cagr(is_, ['Total Revenue', 'Operating Revenue'], 3)
+        if rev_cagr > 0.10: score += 1
+        
+        peg = info.get('pegRatio', 0)
+        pe = info.get('trailingPE', 0)
+        
+        if (peg and 0 < peg < 2.0) or (pe and 0 < pe < 20): score += 1
+        
+        # Final Polish
+        score = min(score, 10) # Cap at 10
+        
+        # Construct Data Package
+        tier = 'Junk'
+        if score >= 7: tier = 'Fortress'
+        elif score >= 4: tier = 'Quality'
+        elif score >= 2: tier = 'Spec'
+        
+        return {
+            'score': round(score, 1),
+            'tier': tier,
+            'roe_3y': roe_3y,
+            'margins': marg_curr,
+            'debt_eq': debt_eq,
+            'rev_cagr': rev_cagr,
+            'is_buyback': is_buyback,
+            'fcf_yield': (info.get('freeCashflow', 0) / (info.get('marketCap', 1) or 1)) if info.get('marketCap') else 0,
+            'pe': pe
+        }
+
+    except Exception as e:
+        # Fail gracefully
+        return {'score': 0, 'tier': 'Error', 'roe_3y':0, 'margins':0, 'debt_eq':0, 'rev_cagr':0, 'is_buyback':False, 'fcf_yield':0, 'pe':0}
 
 # ---------------- TA Indicators ----------------
 def indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -550,7 +575,7 @@ def comment_for_row(r: pd.Series) -> str:
 
 # ---------------- Main Loop ----------------
 frames, snaps = [], []
-print("Fetching data...")
+print("Fetching data (Prices + Financials)...")
 
 for t, y in UNIVERSE:
     # 1. Price Data
@@ -560,7 +585,7 @@ for t, y in UNIVERSE:
     frames.append(df)
     
     # 2. Fundamental Data
-    fundy = fetch_fundamentals(y)
+    fundy = fetch_deep_fundamentals(y)
     
     # 3. Indicators
     ind = indicators(df).dropna(subset=['SMA200', 'SMA50', 'High20', 'RSI14', 'EMA21', 'Vol20', 'ATR14'])
@@ -599,9 +624,10 @@ for t, y in UNIVERSE:
         'AutoDCA_Fill_%': float(gate_det.get('gap_fill_%', np.nan)), 'BreakoutReady': bool(breakout_ready),
         'Breakout_Level': float(breakout_info.get('ceiling', np.nan)), 'Breakout_Stop': float(breakout_info.get('stop', np.nan)),
         # Fundamentals
-        'Fundy_Score': fundy['score'], 'Fundy_Tier': fundy['tier'], 'Fundy_ROE': fundy['roe'],
-        'Fundy_Margin': fundy['margins'], 'Fundy_PE': fundy['pe'], 'Fundy_PEG': fundy['peg'],
-        'Fundy_Growth': fundy['rev_growth'], 'Fundy_Cash': fundy['cash'], 'Fundy_Debt': 0 if fundy['debt_eq'] == 999 else fundy['debt_eq']
+        'Fundy_Score': fundy['score'], 'Fundy_Tier': fundy['tier'], 'Fundy_ROE': fundy['roe_3y'],
+        'Fundy_Margin': fundy['margins'], 'Fundy_PE': fundy['pe'], 'Fundy_RevCAGR': fundy['rev_cagr'],
+        'Fundy_Growth': fundy['rev_cagr'], # Alias for backwards compatibility if needed
+        'Fundy_Debt': fundy['debt_eq'], 'Fundy_Buyback': fundy['is_buyback']
     })
 
 prices_all = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -830,118 +856,4 @@ fundy_rows = "".join([
     f"<td><span class='badge {'shield-high' if r['Fundy_Score']>=7 else ('shield-low' if r['Fundy_Score']<=3 else 'watch')}'>{r['Fundy_Score']}/10 {r['Fundy_Tier']}</span></td>"
     f"<td class='mono'>{fmt_pct(r['Fundy_ROE'])}</td>"
     f"<td class='mono'>{fmt_pct(r['Fundy_Margin'])}</td>"
-    f"<td class='mono'>{fmt_pe(r['Fundy_PE'])}</td>"
-    f"<td class='mono'>{fmt_pct(r['Fundy_Growth'])}</td>"
-    f"<td class='mono'>{r['Fundy_Debt']:.2f}</td>"
-    f"</tr>"
-    for _, r in snaps_df.sort_values('Fundy_Score', ascending=False).iterrows()
-])
-
-html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TraderBruh Dashboard</title>
-    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-    <style>{CSS}</style>
-    <script>{JS}</script>
-</head>
-<body>
-    <div class="nav-wrapper">
-        <div class="nav-inner">
-            <a href="#" class="nav-link active" style="font-weight:700; color:white">TraderBruh</a>
-            <a href="#buy" class="nav-link">Buy</a>
-            <a href="#dca" class="nav-link">DCA</a>
-            <a href="#watch" class="nav-link">Watch</a>
-            <a href="#fundy" class="nav-link">Fundamentals</a>
-            <a href="#gate" class="nav-link">Auto-Gate</a>
-            <a href="#patterns" class="nav-link">Patterns</a>
-            <a href="#news" class="nav-link">News</a>
-        </div>
-    </div>
-
-    <div class="search-container">
-        <input type="text" id="globalSearch" class="search-input" placeholder="Search tickers, signals, or patterns...">
-    </div>
-
-    <div class="container">
-        <div style="margin-bottom:20px">
-            <h1 style="font-size:24px; margin:0 0 4px 0">Market Overview</h1>
-            <div style="color:var(--text-muted); font-size:13px">ASX Technical Analysis & Fundamentals • Updated {datetime.now(SYD).strftime('%I:%M %p %Z')}</div>
-        </div>
-        
-        {kpi_html}
-        {"".join(html_cards)}
-
-        <h2 id="fundy" style="margin-top:40px">Fundamental Health Check</h2>
-        <div class="card">
-            <div class="playbook">
-                <b>The "TraderBruh Shield" (0-10 Score):</b><br>
-                Separating "Compounders" from "Garbage" using Buffett/Quality principles.<br><br>
-                <b>Metrics Tracked (Max 10 pts):</b><br>
-                • <b>Profitability (3 pts):</b> ROE > 15% (Efficiency), Margins > 15% (Pricing Power).<br>
-                • <b>Survival (3 pts):</b> Low Debt/Equity (<0.5), High Current Ratio (>1.5), Interest Coverage.<br>
-                • <b>Cash/Capital (2 pts):</b> FCF Yield & Dividends.<br>
-                • <b>Growth/Val (2 pts):</b> Rev Growth > 10%, PEG < 2.<br><br>
-                <b>The Matrix:</b><br>
-                💎 <b>High Quality (Score 7-10):</b> Fortress balance sheets. OK to DCA dips or size up on breakouts.<br>
-                ⚠️ <b>Speculative/Junk (Score 0-3):</b> Weak fundamentals. If TA says "Buy", use tight stops. If TA says "DCA", <b>AVOID</b> (Falling Knife).
-            </div>
-            <div class="table-responsive">
-                <table>
-                    <thead><tr><th>Ticker</th><th>Quality Score</th><th>ROE</th><th>Margin</th><th>P/E</th><th>Rev Growth</th><th>Debt/Eq</th></tr></thead>
-                    <tbody>{fundy_rows}</tbody>
-                </table>
-            </div>
-        </div>
-
-        <h2 id="gate" style="margin-top:40px">Auto-DCA Candidates</h2>
-        <div class="card">
-            <div class="playbook">
-                <b>Playbook:</b> Gap-down reaction setups. Focus on tickers where the gap is small (≤ {RULES['autodca']['gap_thresh']}%),
-                close reclaimed the prior midpoint, and price is above EMA21. Scale in small.
-            </div>
-            <div class="table-responsive">
-                <table>
-                    <thead><tr><th>Ticker</th><th>Gap %</th><th>Reclaim Mid?</th><th>&gt; EMA21?</th><th>Gap-fill %</th><th>Trend</th></tr></thead>
-                    <tbody>{dca_rows if dca_rows else "<tr><td colspan='6' style='text-align:center; color:var(--text-muted)'>No active setups today</td></tr>"}</tbody>
-                </table>
-            </div>
-        </div>
-
-        <h2 id="patterns" style="margin-top:40px">Patterns &amp; Structures</h2>
-        <div class="card">
-            <div class="playbook">
-                <b>Playbook:</b> High-conviction patterns (last {PATTERN_LOOKBACK} days). Use for context.<br>
-                • <b>Bullish:</b> Ascending Triangles, Double Bottoms.<br>
-                • <b>Bearish:</b> Double Tops, Head & Shoulders.<br>
-                Check <b>Alignment</b> with the trend bucket (BUY/DCA vs AVOID).
-            </div>
-            <div class="table-responsive">
-                <table>
-                    <thead><tr><th>Pattern</th><th>Ticker</th><th>Status</th><th>Confidence</th><th>Alignment</th><th>Mini</th></tr></thead>
-                    <tbody>{pat_rows if pat_rows else "<tr><td colspan='6' style='text-align:center; color:var(--text-muted)'>No patterns right now.</td></tr>"}</tbody>
-                </table>
-            </div>
-        </div>
-
-        <h2 id="news" style="margin-top:40px">Recent Announcements</h2>
-        <div class="card" style="padding:0">
-            <div class="table-responsive">
-                <table>
-                    <thead><tr><th>Date</th><th>Ticker</th><th>Type</th><th>Detail</th></tr></thead>
-                    <tbody>{news_rows}</tbody>
-                </table>
-            </div>
-        </div>
-        
-        <div style="text-align:center; margin-top:40px; color:var(--text-muted); font-size:12px">Generated by TraderBruh • Not Financial Advice</div>
-    </div>
-</body>
-</html>
-"""
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-with open(OUTPUT_HTML, 'w', encoding='utf-8') as f: f.write(html)
-print('Done:', OUTPUT_HTML)
+    f"<td
