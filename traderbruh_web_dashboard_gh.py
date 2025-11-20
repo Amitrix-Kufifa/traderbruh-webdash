@@ -625,7 +625,16 @@ def process_market(market_code, market_conf):
 
         gate_flag, gate_det = auto_dca_gate(ind)
         pname = pats[0]['name'] if pats else ''
-        palign = 'ALIGNED' if (pattern_bias(pname) in [str(sig).lower(), 'neutral'] or str(sig).lower() == 'neutral') else 'CONFLICT'
+	pbias = pattern_bias(pname)
+	sig_str = str(sig).lower()
+
+	# Map signals to biases
+	is_aligned = False
+	if pbias == 'neutral' or sig_str == 'watch': is_aligned = True
+	elif pbias == 'bullish' and sig_str in ['buy', 'dca']: is_aligned = True
+	elif pbias == 'bearish' and sig_str == 'avoid': is_aligned = True
+
+	palign = 'ALIGNED' if is_aligned else 'CONFLICT'
 
         snaps.append({
             'Ticker': t_key, 'Name': t_meta[0], 'Desc': t_meta[1],
