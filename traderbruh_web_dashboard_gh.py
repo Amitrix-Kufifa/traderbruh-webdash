@@ -244,12 +244,14 @@ def fetch_deep_fundamentals(symbol: str):
             'rev_cagr': rev_cagr,
             'is_buyback': is_buyback,
             'fcf_yield': (info.get('freeCashflow', 0) / (info.get('marketCap', 1) or 1)) if info.get('marketCap') else 0,
-            'pe': pe
+            'pe': pe,
+            'cash': cash  # <--- ADDED THIS LINE
         }
 
     except Exception as e:
         # Fail gracefully
-        return {'score': 0, 'tier': 'Error', 'roe_3y':0, 'margins':0, 'debt_eq':0, 'rev_cagr':0, 'is_buyback':False, 'fcf_yield':0, 'pe':0}
+        # <--- ADD 'cash': 0 TO THIS RETURN BELOW ---
+        return {'score': 0, 'tier': 'Error', 'roe_3y':0, 'margins':0, 'debt_eq':0, 'rev_cagr':0, 'is_buyback':False, 'fcf_yield':0, 'pe':0, 'cash': 0}
 
 # ---------------- TA Indicators ----------------
 def indicators(df: pd.DataFrame) -> pd.DataFrame:
