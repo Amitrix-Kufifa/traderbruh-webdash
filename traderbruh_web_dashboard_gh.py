@@ -91,6 +91,11 @@ MARKETS = {
             'NFLX': ('Netflix', 'Streaming.'),
             'CRWD': ('CrowdStrike', 'Cybersecurity.'),
             'NET': ('Cloudflare', 'Edge Cloud.'),
+	    'BMNR': ('BioMarin', 'Biotech: Genetic therapies.'),
+            'CELH': ('Celsius', 'Fitness energy drinks.'),
+            'FUBO': ('FuboTV', 'Sports streaming.'),
+            'PGY':  ('Pagaya', 'AI Fintech/Lending.'),
+            'RKT':  ('Rocket', 'Fintech & Mortgages.'),
         }
     },
     'IND': {
