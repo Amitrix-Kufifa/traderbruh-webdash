@@ -47,6 +47,7 @@ AUTO_UPGRADE_BREAKOUT = True
 
 # --- Market Definitions ---
 # We define the "Universe" for each market here
+# --- Market Definitions ---
 MARKETS = {
     'AUS': {
         'name': 'Australia (ASX)',
@@ -54,21 +55,57 @@ MARKETS = {
         'currency': 'A$',
         'suffix': '.AX',
         'tickers': {
-            'CSL': ('CSL Limited', 'Biotech: vaccines & plasma.'),
-            'COH': ('Cochlear', 'Hearing implants leader.'),
-            'XRO': ('Xero', 'Cloud accounting SaaS.'),
+            # -- WAAAX & Tech --
+            'XRO': ('Xero', 'Cloud accounting globally.'),
             'WTC': ('WiseTech', 'Logistics software (CargoWise).'),
-            'PLS': ('Pilbara Minerals', 'Lithium producer.'),
-            'MIN': ('MinRes', 'Mining services + Li/Fe.'),
-            'RMD': ('ResMed', 'Sleep apnea devices.'),
-            'DRO': ('DroneShield', 'Counter-UAS defence.'),
-            'PNV': ('PolyNovo', 'Wound care (BTM).'),
-            'HUB': ('HUB24', 'Wealth platform.'),
-            'NXT': ('NEXTDC', 'Data centres.'),
-            'TNE': ('TechnologyOne', 'Enterprise ERP SaaS.'),
-            'REA': ('REA Group', 'Real estate portals.'),
+            'TNE': ('TechnologyOne', 'Gov/Edu Enterprise SaaS.'),
+            'NXT': ('NEXTDC', 'Data Centers (AI Infrastructure).'),
+            'ALU': ('Altium', 'PCB Design Software.'),
+            'PME': ('Pro Medicus', 'Radiology AI software.'),
+            'MP1': ('Megaport', 'Network-as-a-Service.'),
+            'CDA': ('Codan', 'Comms & Metal Detection.'),
+            'HUB': ('HUB24', 'Investment Platform.'),
+            'NWL': ('Netwealth', 'Wealth Platform.'),
+            
+            # -- Defense & Aero --
+            'DRO': ('DroneShield', 'Counter-UAS/Drone defense.'),
+            'EOS': ('Electro Optic', 'Space & Defense systems.'),
+            'ASB': ('Austal', 'Shipbuilding (US Navy).'),
+            
+            # -- Strategic Minerals (Lithium/Uranium/Rare Earths) --
+            'PLS': ('Pilbara Minerals', 'Hard-rock Lithium.'),
+            'MIN': ('Mineral Resources', 'Mining services + Lithium.'),
+            'IGO': ('IGO Ltd', 'Nickel & Lithium clean energy.'),
+            'LTR': ('Liontown', 'Lithium developer.'),
+            'LYC': ('Lynas', 'Rare Earths (Non-China supply).'),
+            'BOE': ('Boss Energy', 'Uranium producer.'),
+            'PDN': ('Paladin', 'Uranium (Namibia).'),
+            'DYL': ('Deep Yellow', 'Uranium exploration.'),
+            
+            # -- Healthcare & Bio --
+            'CSL': ('CSL Limited', 'Blood plasma & Vaccines.'),
+            'COH': ('Cochlear', 'Hearing implants.'),
+            'RMD': ('ResMed', 'Sleep apnea/Digital health.'),
+            'TLX': ('Telix', 'Radiopharmaceuticals.'),
+            'PNV': ('PolyNovo', 'Synthetic skin/Wound care.'),
+            'NAN': ('Nanosonics', 'Infection prevention.'),
+            'NEU': ('Neuren', 'Neurodevelopmental drugs.'),
+            
+            # -- Blue Chip / Cyclical --
+            'BHP': ('BHP Group', 'Big Australian Miner.'),
+            'FMG': ('Fortescue', 'Iron Ore & Green Hydrogen.'),
+            'WDS': ('Woodside', 'Oil & Gas energy security.'),
+            'STO': ('Santos', 'LNG & Gas.'),
+            'MQG': ('Macquarie', 'Global Asset Mgmt (The Millionaire Factory).'),
+            'CBA': ('CommBank', 'Largest AU Bank.'),
+            'WES': ('Wesfarmers', 'Retail conglomerate (Bunnings/Kmart).'),
+            'WOW': ('Woolworths', 'Grocery dominance.'),
+            'GMG': ('Goodman Group', 'Industrial Real Estate (Warehouses).'),
+            'REA': ('REA Group', 'Real Estate advertising.'),
             'CAR': ('Carsales', 'Auto marketplace.'),
-            'WES': ('Wesfarmers', 'Conglomerate retail.'),
+            'JHX': ('James Hardie', 'US Housing materials.'),
+            'ALL': ('Aristocrat', 'Gaming & Slots.'),
+            'QAN': ('Qantas', 'Airline & Loyalty.'),
         }
     },
     'USA': {
@@ -77,25 +114,63 @@ MARKETS = {
         'currency': 'U$',
         'suffix': '',
         'tickers': {
+            # -- The Magnificent 7 (AI & Big Tech) --
             'NVDA': ('NVIDIA', 'AI Hardware Leader.'),
-            'AAPL': ('Apple', 'Consumer Electronics.'),
-            'MSFT': ('Microsoft', 'Cloud & Productivity.'),
-            'TSLA': ('Tesla', 'EV & Robotics.'),
-            'AMD': ('AMD', 'Semiconductors.'),
-            'PLTR': ('Palantir', 'Big Data & Defense AI.'),
+            'MSFT': ('Microsoft', 'Cloud & AI (OpenAI).'),
+            'AAPL': ('Apple', 'Consumer ecosystem.'),
+            'AMZN': ('Amazon', 'AWS & Ecommerce.'),
+            'GOOG': ('Alphabet', 'Search & DeepMind.'),
+            'META': ('Meta', 'Social & Ads.'),
+            'TSLA': ('Tesla', 'EVs, Robotics, FSD.'),
+            
+            # -- Semiconductors & Hardware --
+            'AMD':  ('AMD', 'Chips (CPU/GPU).'),
+            'AVGO': ('Broadcom', 'AI Networking & Custom chips.'),
+            'TSM':  ('TSMC', 'The world\'s foundry.'),
+            'ARM':  ('ARM', 'Chip architecture IP.'),
+            'MU':   ('Micron', 'Memory for AI.'),
+            'SMCI': ('Super Micro', 'AI Servers (High Volatility).'),
+            
+            # -- Cybersecurity --
+            'PANW': ('Palo Alto', 'Cybersec platform.'),
+            'CRWD': ('CrowdStrike', 'Endpoint security.'),
+            'NET':  ('Cloudflare', 'Internet infrastructure.'),
+            
+            # -- Software / SaaS / Data --
+            'PLTR': ('Palantir', 'Gov Intel & Data AI.'),
+            'NOW':  ('ServiceNow', 'Enterprise workflow.'),
+            'CRM':  ('Salesforce', 'CRM Giant.'),
+            'SNOW': ('Snowflake', 'Cloud Data.'),
+            'UBER': ('Uber', 'Mobility & Delivery.'),
+            
+            # -- Fintech & Crypto --
             'COIN': ('Coinbase', 'Crypto Exchange.'),
-            'MSTR': ('MicroStrategy', 'Bitcoin Treasury.'),
-            'AMZN': ('Amazon', 'E-comm & AWS.'),
-            'GOOG': ('Alphabet', 'Search & AI.'),
-            'META': ('Meta', 'Social & Metaverse.'),
-            'NFLX': ('Netflix', 'Streaming.'),
-            'CRWD': ('CrowdStrike', 'Cybersecurity.'),
-            'NET': ('Cloudflare', 'Edge Cloud.'),
-	    'BMNR': ('Bitmine', 'Crypto: Blockchain Tech.'),
-            'CELH': ('Celsius', 'Fitness energy drinks.'),
-            'FUBO': ('FuboTV', 'Sports streaming.'),
-            'PGY':  ('Pagaya', 'AI Fintech/Lending.'),
-            'RKT':  ('Rocket', 'Fintech & Mortgages.'),
+            'MSTR': ('MicroStrategy', 'Bitcoin Proxy.'),
+            'SQ':   ('Block', 'Payments & CashApp.'),
+            'PYPL': ('PayPal', 'Digital Payments.'),
+            'HOOD': ('Robinhood', 'Retail trading.'),
+            'AFRM': ('Affirm', 'BNPL Lending.'),
+            
+            # -- Healthcare / Weight Loss --
+            'LLY':  ('Eli Lilly', 'GLP-1 Weight loss leader.'),
+            'NVO':  ('Novo Nordisk', 'Ozempic/Wegovy.'),
+            'VRTX': ('Vertex', 'Cystic Fibrosis/Gene editing.'),
+            
+            # -- Defense & Industrial --
+            'LMT':  ('Lockheed', 'Defense contractor.'),
+            'RTX':  ('Raytheon', 'Missiles & Aero.'),
+            'GE':   ('GE Aerospace', 'Jet Engines.'),
+            
+            # -- Consumer / Spec / Degen --
+            'COST': ('Costco', 'The ultimate retailer.'),
+            'CELH': ('Celsius', 'Energy Drinks (Growth).'),
+            'ONON': ('On Holding', 'Running shoes growth.'),
+            'DKNG': ('DraftKings', 'Sports Betting.'),
+            'RKT':  ('Rocket', 'Mortgage Tech.'),
+            'SOFI': ('SoFi', 'Neobank/Student Loans.'),
+            'BMNR': ('Bitmine', 'Crypto Mining Hardware.'),
+            'FUBO': ('FuboTV', 'Sports Streaming.'),
+            'PGY':  ('Pagaya', 'AI Lending.'),
         }
     },
     'IND': {
@@ -104,18 +179,50 @@ MARKETS = {
         'currency': '₹',
         'suffix': '.NS',
         'tickers': {
-            'RELIANCE': ('Reliance Ind', 'Conglomerate (Oil, Telco, Retail).'),
-            'TCS': ('TCS', 'IT Services.'),
-            'INFY': ('Infosys', 'IT Services.'),
-            'HDFCBANK': ('HDFC Bank', 'Banking Leader.'),
-            'TATAMOTORS': ('Tata Motors', 'Auto (Jaguar Land Rover).'),
-            'ZOMATO': ('Zomato', 'Food Delivery.'),
-            'PAYTM': ('Paytm', 'Fintech.'),
-            'ITC': ('ITC Ltd', 'FMCG & Hotels.'),
-            'ADANIENT': ('Adani Ent', 'Infra Conglomerate.'),
-            'WIPRO': ('Wipro', 'IT Services.'),
-            'BAJFINANCE': ('Bajaj Finance', 'NBFC Lender.'),
-            'DMART': ('Avenue Supermarts', 'Retail Chain.'),
+            # -- The Titans --
+            'RELIANCE': ('Reliance', 'Oil, Retail, Jio Telecom.'),
+            'HDFCBANK': ('HDFC Bank', 'Largest private bank.'),
+            'ICICIBANK': ('ICICI Bank', 'Banking leader.'),
+            'SBIN':     ('SBI', 'State Bank of India (PSU).'),
+            'LICI':     ('LIC', 'Insurance giant.'),
+            
+            # -- IT Services --
+            'TCS':      ('TCS', 'IT Services global.'),
+            'INFY':     ('Infosys', 'IT Services global.'),
+            'HCLTECH':  ('HCL', 'IT & Engineering.'),
+            
+            # -- Auto & Mobility --
+            'TATAMOTORS': ('Tata Motors', 'EVs + Jaguar Land Rover.'),
+            'M&M':        ('Mahindra', 'SUVs & Tractors.'),
+            'MARUTI':     ('Maruti', 'Passenger cars.'),
+            'BAJAJ-AUTO': ('Bajaj', '2 & 3 Wheelers.'),
+            
+            # -- Defense & Public Sector (Massive Trend) --
+            'HAL':      ('HAL', 'Hindustan Aeronautics (Jets).'),
+            'BEL':      ('Bharat Elec', 'Defense electronics.'),
+            'MAZDOCK':  ('Mazagon', 'Shipbuilding/Submarines.'),
+            'COCHINSHIP': ('Cochin Ship', 'Shipyards.'),
+            
+            # -- Infrastructure & Power --
+            'ADANIENT': ('Adani Ent', 'Infra incubator.'),
+            'ADANIGREEN': ('Adani Green', 'Renewables.'),
+            'NTPC':     ('NTPC', 'Power generation.'),
+            'TATAPOWER': ('Tata Power', 'Power & EV Charging.'),
+            'LT':       ('L&T', 'Construction & Engineering.'),
+            
+            # -- Railways (Govt CapEx) --
+            'IRFC':     ('IRFC', 'Railway Finance.'),
+            'RVNL':     ('RVNL', 'Rail Infrastructure.'),
+            
+            # -- Consumer & New Age --
+            'ITC':      ('ITC', 'FMCG, Hotels, Tobacco.'),
+            'TITAN':    ('Titan', 'Jewelry (Wealth proxy).'),
+            'VBL':      ('Varun Bev', 'Pepsi bottler (Growth).'),
+            'ZOMATO':   ('Zomato', 'Food Delivery/Blinkit.'),
+            'PAYTM':    ('Paytm', 'Fintech turnaround?'),
+            'TRENT':    ('Trent', 'Fashion Retail (Zudio).'),
+            'DMART':    ('Avenue Super', 'Retail Chain.'),
+            'BAJFINANCE': ('Bajaj Fin', 'Consumer Lending.'),
         }
     }
 }
