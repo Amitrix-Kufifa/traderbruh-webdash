@@ -91,7 +91,7 @@ MARKETS = {
             'NFLX': ('Netflix', 'Streaming.'),
             'CRWD': ('CrowdStrike', 'Cybersecurity.'),
             'NET': ('Cloudflare', 'Edge Cloud.'),
-	    'BMNR': ('BioMarin', 'Biotech: Genetic therapies.'),
+	    'BMNR': ('Bitmine', 'Crypto: Blockchain Tech.'),
             'CELH': ('Celsius', 'Fitness energy drinks.'),
             'FUBO': ('FuboTV', 'Sports streaming.'),
             'PGY':  ('Pagaya', 'AI Fintech/Lending.'),
@@ -244,7 +244,7 @@ def fetch_deep_fundamentals(symbol: str):
         if (peg and 0 < peg < 2.0) or (pe and 0 < pe < 20): score += 1
         
         score = min(score, 10)
-        tier = 'Fortress' if score >= 7 else ('Quality' if score >= 4 else 'Spec')
+        tier = 'Fortress' if score >= 7 else ('Quality' if score >= 4 else 'High-Risk Speculative')
         
         return {
             'score': round(score, 1), 'tier': tier, 'roe_3y': roe_3y, 'margins': marg_curr,
@@ -463,29 +463,101 @@ def is_euphoria(r: pd.Series) -> bool:
     return (r['Dist_to_52W_High_%'] > -3.5) and (r['Dist_to_SMA200_%'] > 50.0) and (r['RSI14'] >= 70.0)
 
 def comment_for_row(r: pd.Series) -> str:
-    d200, d52, rsi, sig = r['Dist_to_SMA200_%'], r['Dist_to_52W_High_%'], r['RSI14'], str(r.get('Signal', '')).upper()
+    d200 = r['Dist_to_SMA200_%']
+    d52  = r['Dist_to_52W_High_%']
+    rsi  = r['RSI14']
+    sig  = str(r.get('Signal', '')).upper()
     f_score = r.get('Fundy_Score', 0)
-    
-    # Matrix Logic
+
+    eup = is_euphoria(r)
+
+    # --- Core matrix (same logic / slightly tightened wording) ---
     if sig == 'BUY':
-        if f_score >= 7: return f"<b>CORE BUY (High Conviction):</b> Strong technical uptrend backed by Fortress/Quality fundamentals ({f_score}/10). Good for sizing up."
-        elif f_score <= 3: return f"<b>SPECULATIVE BUY (Trash Rally):</b> Uptrend in price, but weak fundamentals ({f_score}/10). Use tight stops; do not marry this trade."
-        else: return f"Standard Buy: Uptrend intact (close > 200DMA). RSI {rsi:.0f} is constructive. Fundys OK ({f_score}/10)."
-    elif sig == 'DCA':
-        if f_score <= 3: return f"<b>AVOID (Falling Knife):</b> Technicals suggest a dip-buy, but fundamentals ({f_score}/10) are Junk. High risk of value trap."
-        elif f_score >= 7: return f"<b>QUALITY DIP (Accumulate):</b> Fortress balance sheet ({f_score}/10) on sale near 200DMA. Ideal for measured adds."
-        else: return f"DCA Zone: Trading near 200DMA (Δ {d200:.1f}%) with cooling RSI. Decent risk/reward for solid co."
-    elif sig == 'WATCH':
-        if is_euphoria(r):
-            if f_score <= 3: return f"<b>EXIT WARNING:</b> Junk rally in euphoria zone ({abs(d52):.1f}% off high). Take profits."
-            return f"Euphoria Zone: Price extended. Quality hold, but trim or trail stops."
+        if f_score >= 7:
+            base = (
+                f"<b>CORE BUY (High Conviction):</b> Strong uptrend with price above 200DMA and "
+                f"recent highs, backed by Fortress/Quality fundamentals ({f_score}/10). "
+                f"Good spot to size up with a medium-term view."
+            )
+        elif f_score <= 3:
+            base = (
+                f"<b>SPECULATIVE BUY (Trash Rally):</b> Momentum is up, but fundamentals are weak "
+                f"({f_score}/10). Treat this as a trade, not a long-term holding; keep stops tight."
+            )
         else:
-            if f_score >= 7: return f"<b>GOLDEN WATCHLIST:</b> High quality ({f_score}/10) near inflection. Wait for setup."
-            return f"Watch: {abs(d52):.1f}% off highs. Momentum mixed."
+            base = (
+                f"Standard Buy: Trend is constructive (close > 200DMA, healthy RSI {rsi:.0f}). "
+                f"Fundamentals middling but acceptable ({f_score}/10); position sizing matters."
+            )
+
+    elif sig == 'DCA':
+        if f_score <= 3:
+            base = (
+                f"<b>AVOID (Falling Knife):</b> Technicals hint at a dip-buy zone, but weak "
+                f"fundamentals ({f_score}/10) increase value-trap risk. Better to watch than to average down blindly."
+            )
+        elif f_score >= 7:
+            base = (
+                f"<b>QUALITY DIP (Accumulate):</b> Strong business ({f_score}/10) pulling back "
+                f"towards the 200DMA (Δ {d200:.1f}%). Good candidate for staged DCA entries."
+            )
+        else:
+            base = (
+                f"DCA Zone: Price is near the 200DMA (Δ {d200:.1f}%) with cooling RSI {rsi:.0f}. "
+                f"Reasonable risk/reward if you already like the story."
+            )
+
+    elif sig == 'WATCH':
+        if eup:
+            if f_score <= 3:
+                base = (
+                f"<b>EXIT WARNING:</b> High-Risk Speculative name ({f_score}/10) riding a "
+                f"euphoric move, only {abs(d52):.1f}% off 52W highs and {d200:.1f}% above 200DMA. "
+                f"This is degenerate rally territory – great place to de-risk, not to size up."
+            )
+            else:
+                base = (
+                    f"Euphoria Zone: Quality name but price is stretched — RSI {rsi:.0f}, "
+                    f"{d200:.1f}% vs 200DMA and {abs(d52):.1f}% off 52W high. "
+                    f"Great problem to have, but forward returns are likely compressed; consider trims or tighter stops."
+                )
+        else:
+            if f_score >= 7:
+                base = (
+                    f"<b>GOLDEN WATCHLIST:</b> High-quality business ({f_score}/10) in a "
+                    f"non-euphoric zone ({abs(d52):.1f}% off highs). Wait for a clean setup or pullback."
+                )
+            else:
+                base = (
+                    f"Watch: Mixed momentum ({abs(d52):.1f}% off 52W high, Δ200DMA {d200:.1f}%, "
+                    f"RSI {rsi:.0f}). Track price action; no urgency either way."
+                )
+
     elif sig == 'AVOID':
-        if f_score >= 7: return f"<b>VALUE WATCH:</b> Great business ({f_score}/10) in a downtrend. Do not catch falling knife; wait for base."
-        return f"Avoid: Weak trend (Δ 200DMA {d200:.1f}%) matches weak fundamentals. Sidelines."
-    return "Neutral."
+        if f_score >= 7:
+            base = (
+                f"<b>VALUE WATCH:</b> Strong business ({f_score}/10) stuck in a weak trend "
+                f"(Δ200DMA {d200:.1f}%). Do not try to bottom-fish; wait for a base and trend reversal."
+            )
+        else:
+            base = (
+                f"Avoid: Downtrend confirmed (Δ200DMA {d200:.1f}%) and weak fundamentals "
+                f"({f_score}/10). Capital is better deployed elsewhere for now."
+            )
+    else:
+        base = "Neutral: No strong technical or fundamental edge right now."
+
+    # --- Extra Euphoria diagnostics block (to bring back your original “explain it” vibe) ---
+    # Only append if we are actually in Euphoria and we haven't already spelled it out in the base text.
+    if eup and "Euphoria" not in base:
+        base += (
+            f" <b>Euphoria diagnostics:</b> RSI {rsi:.0f}, price {d200:.1f}% vs 200DMA and "
+            f"{abs(d52):.1f}% off 52W high. Treat this as a trim/tighten zone rather than "
+            f"a fresh entry point."
+        )
+
+    return base
+
 
 def mini_candle(ind, flag_info=None, pattern_lines=None):
     v = ind.tail(MINI_BARS).copy()
@@ -856,6 +928,10 @@ def render_card(r, badge_type, curr):
             <div class="metric"><label>vs 52W High</label><span class="mono">{r['Dist_to_52W_High_%']:+.1f}%</span></div>
         </div>
         <div class="comment-box">{r['Comment']}</div>
+        {"<div style='font-size:11px;color:var(--text-muted);margin-top:4px'>"
+         f"Euphoria metrics → RSI {r['RSI14']:.0f}, Δ200DMA {r['Dist_to_SMA200_%']:+.1f}%, "
+         f"Δ52W High {r['Dist_to_52W_High_%']:+.1f}%."
+         "</div>" if is_euphoria(r) else ""}
         <div class="chart-container">{r['_mini_candle']}</div>
     </div>
     """
@@ -864,30 +940,66 @@ def render_kpi(label, val, color_cls):
     return f"""<div class="kpi-card"><div class="kpi-lbl">{label}</div><div class="kpi-val {color_cls}">{val}</div></div>"""
 
 def render_market_html(m_code, m_conf, snaps_df, news_df):
-    if snaps_df.empty: return f"<div id='cont-{m_code}' class='market-container'><div style='padding:50px;text-align:center'>No Data Found for {m_code}</div></div>"
+    if snaps_df.empty:
+        return f"<div id='cont-{m_code}' class='market-container'><div style='padding:50px;text-align:center'>No Data Found for {m_code}</div></div>"
     
-    # Grouping
-    BUY = snaps_df[snaps_df.Signal == 'BUY'].sort_values(['Fundy_Score', 'Dist_to_52W_High_%'], ascending=[False, False])
-    DCA = snaps_df[snaps_df.Signal == 'DCA'].sort_values(['Fundy_Score', 'Dist_to_SMA200_%'], ascending=[False, True])
-    WATCH = snaps_df[snaps_df.Signal == 'WATCH'].sort_values(['Fundy_Score', 'Dist_to_52W_High_%'], ascending=[False, False])
-    AVOID = snaps_df[snaps_df.Signal == 'AVOID'].sort_values('Fundy_Score', ascending=True)
-    
-    GATE  = snaps_df[snaps_df['AutoDCA_Flag'] == True].sort_values('AutoDCA_Fill_%', ascending=False)
-    PATS  = snaps_df[snaps_df['_pattern_name'] != ''].sort_values(['_pattern_conf', 'Ticker'], ascending=[False, True])
-    
-    BRKCOUNT = int(snaps_df['BreakoutReady'].sum())
+    # Split by fundamentals
+    core_mask = snaps_df['Fundy_Score'] >= 4
+    spec_mask = snaps_df['Fundy_Score'] < 4
+
+    core  = snaps_df[core_mask]
+    degen = snaps_df[spec_mask]
+
+    # Core sections: only fundamentally acceptable names
+    BUY = core[core.Signal == 'BUY'].sort_values(
+        ['Fundy_Score', 'Dist_to_52W_High_%'],
+        ascending=[False, False]
+    )
+    DCA = core[core.Signal == 'DCA'].sort_values(
+        ['Fundy_Score', 'Dist_to_SMA200_%'],
+        ascending=[False, True]
+    )
+    WATCH = core[core.Signal == 'WATCH'].sort_values(
+        ['Fundy_Score', 'Dist_to_52W_High_%'],
+        ascending=[False, False]
+    )
+    AVOID = core[core.Signal == 'AVOID'].sort_values(
+        'Fundy_Score', ascending=True
+    )
+
+    # Auto-DCA & Patterns restricted to core
+    GATE = core[core['AutoDCA_Flag'] == True].sort_values(
+        'AutoDCA_Fill_%', ascending=False
+    )
+    PATS = core[core['_pattern_name'] != ''].sort_values(
+        ['_pattern_conf', 'Ticker'],
+        ascending=[False, True]
+    )
+
+    # Degenerate bucket: fundamentally weak names
+    DEGEN = degen.sort_values(['Fundy_Score', 'RSI14'], ascending=[True, False])
+
+    BRKCOUNT = int(core['BreakoutReady'].sum())
     NEWSCOUNT = len(news_df)
     curr = m_conf['currency']
 
     # Cards HTML
     html_cards = []
-    for section, df, badge in [('BUY — Actionable', BUY, 'buy'), ('DCA — Accumulate', DCA, 'dca'), ('WATCH — Monitoring', WATCH, 'watch'), ('AVOID — Sidelines', AVOID, 'avoid')]:
+    for section, df, badge in [
+        ('BUY — Actionable', BUY, 'buy'),
+        ('DCA — Accumulate', DCA, 'dca'),
+        ('WATCH — Monitoring', WATCH, 'watch'),
+        ('AVOID — Sidelines', AVOID, 'avoid')
+    ]:
         if not df.empty:
             grid_items = "".join([render_card(r, badge, curr) for _, r in df.iterrows()])
-            html_cards.append(f"<h2 id='{m_code}-{badge}' style='margin-top:30px; font-size:18px; color:var(--text-muted)'>{section}</h2><div class='grid'>{grid_items}</div>")
+            html_cards.append(
+                f"<h2 id='{m_code}-{badge}' style='margin-top:30px; font-size:18px; color:var(--text-muted)'>{section}</h2>"
+                f"<div class='grid'>{grid_items}</div>"
+            )
 
     # KPI HTML
-    counts = snaps_df['Signal'].value_counts()
+    counts = core['Signal'].value_counts()
     kpi_html = f"""
     <div class="kpi-scroll">
         {render_kpi('Buy Signals', counts.get('BUY', 0), 'text-green')}
@@ -896,27 +1008,99 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
         {render_kpi('Avoid', counts.get('AVOID', 0), 'text-red')}
         {render_kpi('Breakouts', BRKCOUNT, 'text-green')}
         {render_kpi('Patterns', len(PATS), 'text-purple')}
+        {render_kpi('Degens', len(DEGEN), 'text-red')}
         {render_kpi('Recent News', NEWSCOUNT, 'text-main')}
     </div>
     """
 
-    # Tables
-    dca_rows = "".join([f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td class='mono text-red'>{r['AutoDCA_Gap_%']:.1f}%</td><td class='mono'>{'Yes' if r['AutoDCA_ReclaimMid'] else 'No'}</td><td class='mono'>{'Yes' if r['AutoDCA_AboveEMA21'] else 'No'}</td><td class='mono'>{r['AutoDCA_Fill_%']:.1f}%</td><td>{r['_mini_spark']}</td></tr>" for _, r in GATE.iterrows()])
-    pat_rows = "".join([f"<tr class='searchable-item'><td>{r['_pattern_name']}</td><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td class='mono'>{r['_pattern_status']}</td><td class='mono'>{r['_pattern_conf']:.2f}</td><td class='mono'>{r['_pattern_align']}</td><td>{r['_mini_candle']}</td></tr>" for _, r in PATS.iterrows()])
-    news_rows = "".join([f"<tr class='searchable-item'><td class='mono' style='color:var(--text-muted)'>{r['Date']}</td><td><b>{r['Ticker']}</b></td><td><span class='badge news'>{r['Type']}</span></td><td>{r['Headline']}</td></tr>" for _, r in news_df.sort_values('Date', ascending=False).iterrows()]) if not news_df.empty else "<tr><td colspan='4' style='text-align:center; color:gray'>No news data (PDFs) available for this region.</td></tr>"
+    # Auto-DCA table rows
+    dca_rows = "".join([
+        f"<tr class='searchable-item'>"
+        f"<td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
+        f"<td class='mono text-red'>{r['AutoDCA_Gap_%']:.1f}%</td>"
+        f"<td class='mono'>{'Yes' if r['AutoDCA_ReclaimMid'] else 'No'}</td>"
+        f"<td class='mono'>{'Yes' if r['AutoDCA_AboveEMA21'] else 'No'}</td>"
+        f"<td class='mono'>{r['AutoDCA_Fill_%']:.1f}%</td>"
+        f"<td>{r['_mini_spark']}</td>"
+        f"</tr>"
+        for _, r in GATE.iterrows()
+    ])
 
-    def fmt_pe(x): return f"{x:.1f}" if x and x > 0 else "-"
-    def fmt_pct(x): return f"{x*100:.1f}%" if x else "-"
+    # Patterns table rows
+    pat_rows = "".join([
+        f"<tr class='searchable-item'>"
+        f"<td>{r['_pattern_name']}</td>"
+        f"<td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
+        f"<td class='mono'>{r['_pattern_status']}</td>"
+        f"<td class='mono'>{r['_pattern_conf']:.2f}</td>"
+        f"<td class='mono'>{r['_pattern_align']}</td>"
+        f"<td>{r['_mini_candle']}</td>"
+        f"</tr>"
+        for _, r in PATS.iterrows()
+    ])
+
+    # News table rows
+    if not news_df.empty:
+        news_sorted = news_df.sort_values('Date', ascending=False)
+        news_rows = "".join([
+            f"<tr class='searchable-item'>"
+            f"<td class='mono' style='color:var(--text-muted)'>{r['Date']}</td>"
+            f"<td><b>{r['Ticker']}</b></td>"
+            f"<td><span class='badge news'>{r['Type']}</span></td>"
+            f"<td>{r['Headline']}</td>"
+            f"</tr>"
+            for _, r in news_sorted.iterrows()
+        ])
+    else:
+        news_rows = "<tr><td colspan='4' style='text-align:center; color:gray'>No news data (PDFs) available for this region.</td></tr>"
+
+    # Formatter helpers
+    def fmt_pe(x):
+        return f"{x:.1f}" if x and x > 0 else "-"
+
+    def fmt_pct(x):
+        return f"{x * 100:.1f}%" if x else "-"
+
+    # Fundamental table rows
     fundy_rows_list = []
     for _, r in snaps_df.sort_values('Fundy_Score', ascending=False).iterrows():
         score = r['Fundy_Score']
-        if score >= 7: b_cls = 'shield-high'
-        elif score <= 3: b_cls = 'shield-low'
-        else: b_cls = 'watch'
-        fundy_rows_list.append(f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td><span class='badge {b_cls}'>{score}/10 {r['Fundy_Tier']}</span></td><td class='mono'>{fmt_pct(r['Fundy_ROE'])}</td><td class='mono'>{fmt_pct(r['Fundy_Margin'])}</td><td class='mono'>{fmt_pe(r['Fundy_PE'])}</td><td class='mono'>{fmt_pct(r['Fundy_RevCAGR'])}</td><td class='mono'>{r['Fundy_Debt']:.2f}</td></tr>")
+        if score >= 7:
+            b_cls = 'shield-high'      # Fortress
+        elif score >= 4:
+            b_cls = 'watch'            # Quality
+        else:
+            b_cls = 'shield-low'       # High-Risk Speculative
+
+        fundy_rows_list.append(
+            f"<tr class='searchable-item'>"
+            f"<td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
+            f"<td><span class='badge {b_cls}'>{score:.1f}/10 {r['Fundy_Tier']}</span></td>"
+            f"<td class='mono'>{fmt_pct(r['Fundy_ROE'])}</td>"
+            f"<td class='mono'>{fmt_pct(r['Fundy_Margin'])}</td>"
+            f"<td class='mono'>{fmt_pe(r['Fundy_PE'])}</td>"
+            f"<td class='mono'>{fmt_pct(r['Fundy_RevCAGR'])}</td>"
+            f"<td class='mono'>{r['Fundy_Debt']:.2f}</td>"
+            f"</tr>"
+        )
     fundy_rows = "".join(fundy_rows_list)
 
-    # Nav Bar inside Market Container
+    # Degenerate Radar rows
+    degen_rows_list = []
+    for _, r in DEGEN.iterrows():
+        degen_rows_list.append(
+            f"<tr class='searchable-item'>"
+            f"<td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
+            f"<td><span class='badge shield-low'>⚠️ {r['Fundy_Score']:.1f}/10 High-Risk Spec</span></td>"
+            f"<td>{r['Signal']}</td>"
+            f"<td class='mono'>{r['RSI14']:.0f}</td>"
+            f"<td class='mono'>{r['Dist_to_52W_High_%']:+.1f}%</td>"
+            f"<td>{r['_mini_spark']}</td>"
+            f"</tr>"
+        )
+    degen_rows = "".join(degen_rows_list) if degen_rows_list else "<tr><td colspan='6' style='text-align:center'>No degenerates on the radar today.</td></tr>"
+
+    # Nav bar inside Market Container
     nav_html = f"""
     <div class="nav-wrapper">
         <div class="nav-inner">
@@ -925,6 +1109,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
             <a href="#{m_code}-dca" class="nav-link">DCA</a>
             <a href="#{m_code}-watch" class="nav-link">Watch</a>
             <a href="#{m_code}-fundy" class="nav-link">Fundamentals</a>
+            <a href="#{m_code}-degen" class="nav-link">Degenerate Radar</a>
             <a href="#{m_code}-gate" class="nav-link">Auto-Gate</a>
             <a href="#{m_code}-patterns" class="nav-link">Patterns</a>
             <a href="#{m_code}-news" class="nav-link">News</a>
@@ -932,6 +1117,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     </div>
     """
 
+    # Main HTML for the market
     return f"""
     <div id="cont-{m_code}" class="market-container {'active' if m_code=='AUS' else ''}">
         {nav_html}
@@ -941,33 +1127,121 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
         <div class="container">
             <div style="margin-bottom:20px">
                 <h1 style="font-size:24px; margin:0 0 4px 0">{m_conf['name']} Overview</h1>
-                <div style="color:var(--text-muted); font-size:13px">Updated {datetime.now(zoneinfo.ZoneInfo(m_conf['tz'])).strftime('%I:%M %p %Z')}</div>
+                <div style="color:var(--text-muted); font-size:13px">
+                    Updated {datetime.now(zoneinfo.ZoneInfo(m_conf['tz'])).strftime('%I:%M %p %Z')}
+                </div>
             </div>
             {kpi_html}
             {"".join(html_cards)}
-            
+
             <h2 id="{m_code}-fundy" style="margin-top:40px">Fundamental Health Check</h2>
             <div class="card">
-                <div class="playbook"><b>The TraderBruh Shield:</b> 💎 7-10 (Fortress), ⚖️ 4-6 (Quality), ⚠️ 0-3 (Junk).</div>
-                <div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>ROE</th><th>Margin</th><th>P/E</th><th>Rev Growth</th><th>Debt/Eq</th></tr></thead><tbody>{fundy_rows}</tbody></table></div>
+                <div class="playbook">
+                    <b>The TraderBruh Shield:</b> 💎 7–10 (Fortress), ⚖️ 4–6 (Quality), ⚠️ 0–3 (High-Risk Speculative).
+                </div>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Ticker</th>
+                                <th>Score</th>
+                                <th>ROE</th>
+                                <th>Margin</th>
+                                <th>P/E</th>
+                                <th>Rev Growth</th>
+                                <th>Debt/Eq</th>
+                            </tr>
+                        </thead>
+                        <tbody>{fundy_rows}</tbody>
+                    </table>
+                </div>
+            </div>
+
+            <h2 id="{m_code}-degen" style="margin-top:40px">Degenerate Radar (High-Risk Speculative)</h2>
+            <div class="card">
+                <div class="playbook">
+                    <b>Read this carefully:</b> Score &lt; 4 means weak fundamentals.
+                    This section is for high-risk speculative trades only – not long-term investing.
+                    Think of it as your inner WallStreetBets goblin, but with a warning label.
+                </div>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Ticker</th>
+                                <th>Shield</th>
+                                <th>Tech Signal</th>
+                                <th>RSI</th>
+                                <th>Δ 52W High</th>
+                                <th>Trend</th>
+                            </tr>
+                        </thead>
+                        <tbody>{degen_rows}</tbody>
+                    </table>
+                </div>
             </div>
 
             <h2 id="{m_code}-gate" style="margin-top:40px">Auto-DCA Candidates</h2>
             <div class="card">
-                <div class="playbook"><b>Playbook:</b> Gap-down < {RULES['autodca']['gap_thresh']}%, Reclaim Mid, > EMA21.</div>
-                <div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Gap %</th><th>Reclaim?</th><th>&gt; EMA21?</th><th>Gap-fill %</th><th>Trend</th></tr></thead><tbody>{dca_rows if dca_rows else "<tr><td colspan='6' style='text-align:center'>No setups.</td></tr>"}</tbody></table></div>
+                <div class="playbook">
+                    <b>Playbook:</b> Gap-down &lt; {RULES['autodca']['gap_thresh']}%, reclaim mid-gap, and close &gt; EMA21.
+                </div>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Ticker</th>
+                                <th>Gap %</th>
+                                <th>Reclaim?</th>
+                                <th>&gt; EMA21?</th>
+                                <th>Gap-fill %</th>
+                                <th>Trend</th>
+                            </tr>
+                        </thead>
+                        <tbody>{dca_rows if dca_rows else "<tr><td colspan='6' style='text-align:center'>No setups.</td></tr>"}</tbody>
+                    </table>
+                </div>
             </div>
 
             <h2 id="{m_code}-patterns" style="margin-top:40px">Patterns &amp; Structures</h2>
             <div class="card">
-                <div class="playbook"><b>Playbook:</b> Confirmed Double Tops/Bottoms, Triangles (Last {PATTERN_LOOKBACK} days).</div>
-                <div class="table-responsive"><table><thead><tr><th>Pattern</th><th>Ticker</th><th>Status</th><th>Conf</th><th>Align</th><th>Mini</th></tr></thead><tbody>{pat_rows if pat_rows else "<tr><td colspan='6' style='text-align:center'>No patterns.</td></tr>"}</tbody></table></div>
+                <div class="playbook">
+                    <b>Playbook:</b> Confirmed Double Tops/Bottoms, H&amp;S and Triangles (last {PATTERN_LOOKBACK} days).
+                </div>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Pattern</th>
+                                <th>Ticker</th>
+                                <th>Status</th>
+                                <th>Conf</th>
+                                <th>Align</th>
+                                <th>Mini</th>
+                            </tr>
+                        </thead>
+                        <tbody>{pat_rows if pat_rows else "<tr><td colspan='6' style='text-align:center'>No patterns.</td></tr>"}</tbody>
+                    </table>
+                </div>
             </div>
 
             <h2 id="{m_code}-news" style="margin-top:40px">News</h2>
             <div class="card" style="padding:0">
-                <div class="table-responsive"><table><thead><tr><th>Date</th><th>Ticker</th><th>Type</th><th>Headline</th></tr></thead><tbody>{news_rows}</tbody></table></div>
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Ticker</th>
+                                <th>Type</th>
+                                <th>Headline</th>
+                            </tr>
+                        </thead>
+                        <tbody>{news_rows}</tbody>
+                    </table>
+                </div>
             </div>
+
             <div style="height:50px"></div>
         </div>
     </div>
