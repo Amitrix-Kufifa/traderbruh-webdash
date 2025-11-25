@@ -57,7 +57,6 @@ MARKETS = {
             "WTC": ("WiseTech", "Logistics software (CargoWise).", "Growth"),
             "TNE": ("TechnologyOne", "Gov/Edu Enterprise SaaS.", "Core"),
             "NXT": ("NEXTDC", "Data Centers (AI Infrastructure).", "Growth"),
-            "ALU": ("Altium", "PCB Design Software.", "Growth"),
             "PME": ("Pro Medicus", "Radiology AI software.", "Growth"),
             "MP1": ("Megaport", "Network-as-a-Service.", "Spec"),
             "CDA": ("Codan", "Comms & Metal Detection.", "Core"),
@@ -167,10 +166,7 @@ MARKETS = {
             "SOFI": ("SoFi", "Neobank/Student Loans.", "Growth"),
             "FUBO": ("FuboTV", "Sports Streaming.", "Spec"),
             "PGY":  ("Pagaya", "AI Lending.", "Spec"),
-            # Optional biotech factor you liked
-            "BMRN": ("BioMarin", "Biotech: Genetic therapies.", "Growth"),
-            # BitMine as true degen
-            "BMNR": ("BitMine", "Crypto Mining Hardware.", "Spec"),
+            "BMNR": ("BitMine", "Crypto Mining Hardware.", "Growth"),
         },
     },
     "IND": {
