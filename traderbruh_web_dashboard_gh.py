@@ -1126,9 +1126,9 @@ def process_market(market_code: str, market_conf: dict):
 
         fundy = fetch_deep_fundamentals(full_sym)
 
-        ind = indicators(df).dropna(
-            subset=["SMA200", "SMA50", "High20", "RSI14", "EMA21", "Vol20", "ATR14"]
-        )
+    # REMOVED 'SMA200' and 'SMA50' from the mandatory list
+        ind = indicators(df).dropna(subset=['High20', 'RSI14', 'EMA21', 'Vol20', 'ATR14'])
+	
         if ind.empty:
             continue
         last = ind.iloc[-1]
