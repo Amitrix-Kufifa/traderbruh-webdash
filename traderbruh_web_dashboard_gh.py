@@ -1,6 +1,6 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 5.2 (Sassy Commentary + Robust Data + Fixes)
+# Version: Ultimate 5.3 (Fixed Rendering + Deleted Dead Tickers)
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -60,7 +60,6 @@ MARKETS = {
             "WTC": ("WiseTech", "Logistics software (CargoWise).", "Growth"),
             "TNE": ("TechnologyOne", "Gov/Edu Enterprise SaaS.", "Core"),
             "NXT": ("NEXTDC", "Data Centers (AI Infrastructure).", "Growth"),
-            "ALU": ("Altium", "PCB Design Software.", "Growth"),
             "PME": ("Pro Medicus", "Radiology AI software.", "Growth"),
             "MP1": ("Megaport", "Network-as-a-Service.", "Spec"),
             "CDA": ("Codan", "Comms & Metal Detection.", "Core"),
@@ -767,8 +766,235 @@ def process_market(m_code, m_conf):
 
 # ---------------- HTML Construction ----------------
 
+CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+:root { --bg: #0f172a; --surface-1: #1e293b; --surface-2: #334155; --primary: #3b82f6; --text-main: #f1f5f9; --text-muted: #94a3b8; --accent-green: #10b981; --accent-amber: #f59e0b; --accent-red: #ef4444; --accent-purple: #a855f7; --glass: rgba(30, 41, 59, 0.7); --border: rgba(148, 163, 184, 0.1); }
+* { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
+body { background: var(--bg); background-image: radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.1) 0px, transparent 50%), radial-gradient(at 100% 100%, rgba(168, 85, 247, 0.1) 0px, transparent 50%); background-attachment: fixed; color: var(--text-main); font-family: 'Inter', sans-serif; margin: 0; padding-bottom: 60px; font-size: 14px; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.text-green { color: var(--accent-green); } .text-red { color: var(--accent-red); } .text-amber { color: var(--accent-amber); } .text-purple { color: var(--accent-purple); } .text-primary { color: var(--primary); } .hidden { display: none !important; }
+.market-tabs { position: sticky; top: 0; z-index: 200; background: #020617; border-bottom: 1px solid var(--border); display: flex; justify-content: center; gap: 10px; padding: 10px; }
+.market-tab { background: transparent; border: 1px solid var(--text-muted); color: var(--text-muted); padding: 8px 20px; border-radius: 999px; cursor: pointer; font-weight: 600; transition: 0.2s; }
+.market-tab.active { background: var(--primary); border-color: var(--primary); color: white; }
+.nav-wrapper { position: sticky; top: 53px; z-index: 100; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); padding: 10px 16px; }
+.nav-inner { display: flex; align-items: center; gap: 12px; max-width: 1200px; margin: 0 auto; overflow-x: auto; scrollbar-width: none; }
+.nav-inner::-webkit-scrollbar { display: none; }
+.nav-link { white-space: nowrap; color: var(--text-muted); text-decoration: none; padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 500; background: rgba(255,255,255,0.03); border: 1px solid transparent; transition: all 0.2s; }
+.nav-link:hover, .nav-link.active { background: rgba(255,255,255,0.1); color: white; border-color: rgba(255,255,255,0.1); }
+.market-container { display: none; }
+.market-container.active { display: block; animation: fadein 0.3s; }
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+.search-container { max-width: 1200px; margin: 16px auto 0; padding: 0 16px; }
+.search-input { width: 100%; background: var(--glass); border: 1px solid var(--border); padding: 12px 16px; border-radius: 12px; color: white; font-family: 'Inter'; font-size: 15px; outline: none; transition: border-color 0.2s; }
+.search-input:focus { border-color: var(--primary); }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+@media(max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+.card { background: var(--glass); backdrop-filter: blur(10px); border: 1px solid var(--border); border-radius: 16px; padding: 16px; overflow: hidden; position: relative; box-shadow: 0 4px 20px rgba(0,0,0,0.2); }
+.card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+.ticker-badge { background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 6px; font-weight: 700; font-size: 15px; letter-spacing: 0.5px; color: white; text-decoration: none; display: inline-block; }
+.price-block { text-align: right; }
+.price-main { font-size: 18px; font-weight: 600; }
+.price-sub { font-size: 11px; color: var(--text-muted); }
+.metrics-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; }
+.metric { display: flex; flex-direction: column; }
+.metric label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+.metric span { font-size: 13px; font-weight: 500; }
+.comment-box { font-size: 13px; line-height: 1.5; color: #cbd5e1; margin-bottom: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+.playbook { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; color: #e2e8f0; line-height: 1.6; }
+.playbook b { color: white; }
+.badge { padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; display: inline-block; }
+.badge.buy { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.2); }
+.badge.dca { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.2); }
+.badge.watch { background: rgba(59, 130, 246, 0.15); color: var(--primary); border: 1px solid rgba(59, 130, 246, 0.2); }
+.badge.avoid { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.2); }
+.badge.news { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple); }
+.badge.shield-high { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.2); }
+.badge.shield-low { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.2); }
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+.pulse { animation: pulse 2s infinite; }
+.euphoria-glow { box-shadow: 0 0 15px rgba(245, 158, 11, 0.15); border-color: rgba(245, 158, 11, 0.3); }
+.kpi-scroll { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 24px; scrollbar-width: none; }
+.kpi-scroll::-webkit-scrollbar { display: none; }
+.kpi-card { min-width: 140px; background: var(--surface-1); border-radius: 12px; padding: 12px; border: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; }
+.kpi-val { font-size: 24px; font-weight: 700; line-height: 1; margin-top: 4px; }
+.kpi-lbl { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.table-responsive { overflow-x: auto; border-radius: 12px; border: 1px solid var(--border); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 12px 16px; color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border); background: rgba(15, 23, 42, 0.5); white-space: nowrap; }
+td { padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(255,255,255,0.02); }
+.chart-container { margin-top: 10px; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05); }
+"""
+
+JS = """
+function switchMarket(code) {
+    document.querySelectorAll('.market-container').forEach(el => el.classList.remove('active'));
+    document.getElementById('cont-'+code).classList.add('active');
+    document.querySelectorAll('.market-tab').forEach(el => el.classList.remove('active'));
+    document.getElementById('tab-'+code).classList.add('active');
+}
+function init() {
+    document.querySelectorAll('.search-input').forEach(input => {
+        input.addEventListener('input', (e) => {
+            const query = e.target.value.toLowerCase();
+            const activeCont = document.querySelector('.market-container.active');
+            if (!activeCont) return;
+            activeCont.querySelectorAll('.searchable-item').forEach(item => {
+                const text = item.innerText.toLowerCase();
+                item.classList.toggle('hidden', !text.includes(query));
+            });
+        });
+    });
+    document.querySelectorAll('th').forEach(th => {
+        th.addEventListener('click', () => {
+            const table = th.closest('table');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            const idx = Array.from(th.parentNode.children).indexOf(th);
+            const asc = th.dataset.asc === 'true';
+            rows.sort((a, b) => {
+                const v1 = a.children[idx].innerText;
+                const v2 = b.children[idx].innerText;
+                const n1 = parseFloat(v1.replace(/[^0-9.-]/g, ''));
+                const n2 = parseFloat(v2.replace(/[^0-9.-]/g, ''));
+                if (!isNaN(n1) && !isNaN(n2)) return asc ? n1 - n2 : n2 - n1;
+                return asc ? v1.localeCompare(v2) : v2.localeCompare(v1);
+            });
+            rows.forEach(r => tbody.appendChild(r));
+            th.dataset.asc = !asc;
+        });
+    });
+}
+window.addEventListener('DOMContentLoaded', init);
+"""
+
+def render_card(r, badge_type, curr):
+    euphoria_cls = "euphoria-glow" if is_euphoria(r) else ""
+    euphoria_tag = '<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;margin-left:6px">Euphoria</span>' if is_euphoria(r) else ""
+    news_tag = '<span class="badge news" style="margin-left:6px">News</span>' if "News:" in (r['Comment'] or "") else ""
+    
+    score = r['Fundy_Score']
+    if score >= 7: s_badge, s_icon = "shield-high", "🛡️"
+    elif score < 4: s_badge, s_icon = "shield-low", "⚠️"
+    else: s_badge, s_icon = "watch", "⚖️"
+    if score == 10: s_icon = "💎"
+    fundy_html = f'<span class="badge {s_badge}" style="margin-left:6px">{s_icon} {score}/10 {r["Fundy_Tier"]}</span>'
+
+    return f"""
+    <div class="card searchable-item {euphoria_cls}">
+        <div class="card-header">
+            <div>
+                <span class="ticker-badge mono">{r['Ticker']}</span>
+                <span class="badge {badge_type}" style="margin-left:8px">{r['Signal']}</span>
+                {fundy_html} {euphoria_tag} {news_tag}
+                <div style="font-size:12px; color:var(--text-muted); margin-top:4px">{r['Name']}</div>
+            </div>
+            <div class="price-block">
+                <div class="price-main mono">{curr}{r['LastClose']:.2f}</div>
+                <div class="price-sub">{r['LastDate']}</div>
+            </div>
+        </div>
+        <div class="metrics-row">
+            <div class="metric"><label>RSI(14)</label><span class="mono" style="color:{'#ef4444' if r['RSI14']>70 else ('#10b981' if r['RSI14']>45 else '#f59e0b')}">{r['RSI14']:.0f}</span></div>
+            <div class="metric"><label>vs 200DMA</label><span class="mono">{r['Dist_to_SMA200_%']:+.1f}%</span></div>
+            <div class="metric"><label>vs 52W High</label><span class="mono">{r['Dist_to_52W_High_%']:+.1f}%</span></div>
+        </div>
+        <div class="comment-box">{r['Comment']}</div>
+        <div class="chart-container">{r['_mini_candle']}</div>
+    </div>
+    """
+
+def render_kpi(label, val, color_cls):
+    return f"""<div class="kpi-card"><div class="kpi-lbl">{label}</div><div class="kpi-val {color_cls}">{val}</div></div>"""
+
+def render_market_html(m_code, m_conf, snaps_df, news_df):
+    if snaps_df.empty: return f"<div id='cont-{m_code}' class='market-container'><div style='padding:50px'>No Data</div></div>"
+    
+    mask_spec = snaps_df['Category'] == 'Spec'
+    DEGEN = snaps_df[mask_spec].sort_values(['Fundy_Score', 'RSI14'], ascending=[True, False])
+    CORE  = snaps_df[~mask_spec]
+
+    BUY   = CORE[CORE.Signal == 'BUY'].sort_values(['Fundy_Score'], ascending=False)
+    DCA   = CORE[CORE.Signal == 'DCA'].sort_values(['Fundy_Score'], ascending=False)
+    WATCH = CORE[CORE.Signal == 'WATCH'].sort_values(['Fundy_Score'], ascending=False)
+    AVOID = CORE[CORE.Signal == 'AVOID'].sort_values(['Fundy_Score'], ascending=True)
+
+    GATE  = CORE[CORE['AutoDCA_Flag']==True]
+    PATS  = CORE[CORE['_pattern_name']!='']
+    
+    def mk_card(df, badge):
+        if df.empty: return ""
+        h = f"<h2 id='{m_code}-{badge}' style='color:var(--text-muted);margin-top:30px'>{badge.upper()}</h2><div class='grid'>"
+        for _, r in df.iterrows(): h += render_card(r, badge, m_conf['currency'])
+        return h + "</div>"
+
+    html_cards = mk_card(BUY,'buy') + mk_card(DCA,'dca') + mk_card(WATCH,'watch') + mk_card(AVOID,'avoid')
+
+    degen_rows = "".join([f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td><span class='badge shield-low'>{r['Fundy_Score']} Spec</span></td><td>{r['Signal']}</td><td class='mono'>{r['Dist_to_SMA200_%']:+.1f}%</td><td>{r['_mini_spark']}</td></tr>" for _, r in DEGEN.iterrows()]) if not DEGEN.empty else "<tr><td colspan='5' style='text-align:center'>No Degens.</td></tr>"
+    
+    gate_rows = "".join([f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td class='mono text-red'>{r['AutoDCA_Gap_%']:.1f}%</td><td class='mono'>{'Yes' if r['AutoDCA_ReclaimMid'] else 'No'}</td><td class='mono'>{'Yes' if r['AutoDCA_AboveEMA21'] else 'No'}</td><td class='mono'>{r['AutoDCA_Fill_%']:.1f}%</td><td>{r['_mini_spark']}</td></tr>" for _, r in GATE.iterrows()]) if not GATE.empty else "<tr><td colspan='6' style='text-align:center'>No setups.</td></tr>"
+    
+    pat_rows = "".join([f"<tr class='searchable-item'><td>{r['_pattern_name']}</td><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td class='mono'>{r['_pattern_status']}</td><td class='mono'>{r['_pattern_conf']:.2f}</td><td class='mono'>{r['_pattern_align']}</td><td>{r['_mini_candle']}</td></tr>" for _, r in PATS.iterrows()]) if not PATS.empty else "<tr><td colspan='6' style='text-align:center'>No patterns.</td></tr>"
+    
+    news_rows = "".join([f"<tr class='searchable-item'><td class='mono' style='color:var(--text-muted)'>{r['Date']}</td><td><b>{r['Ticker']}</b></td><td><span class='badge news'>{r['Type']}</span></td><td>{r['Headline']}</td></tr>" for _, r in news_df.sort_values('Date', ascending=False).iterrows()]) if not news_df.empty else "<tr><td colspan='4' style='text-align:center'>No news.</td></tr>"
+
+    f_rows = ""
+    for _, r in snaps_df.sort_values('Fundy_Score', ascending=False).iterrows():
+        sc = r['Fundy_Score']
+        cl = 'shield-high' if sc>=7 else ('watch' if sc>=4 else 'shield-low')
+        f_rows += f"<tr class='searchable-item'><td>{r['Ticker']}</td><td><span class='badge {cl}'>{sc} {r['Fundy_Tier']}</span></td><td class='mono'>{r['Fundy']['roe_3y']*100:.1f}%</td><td class='mono'>{r['Fundy']['margins']*100:.1f}%</td><td class='mono'>{r['Fundy']['debt_eq']:.2f}</td><td class='mono'>{r['Category']}</td></tr>"
+
+    kpi_html = f"""<div class="kpi-scroll">
+        {render_kpi('Buy', len(BUY), 'text-green')}
+        {render_kpi('DCA', len(DCA), 'text-amber')}
+        {render_kpi('Watch', len(WATCH), 'text-primary')}
+        {render_kpi('Avoid', len(AVOID), 'text-red')}
+        {render_kpi('Degens', len(DEGEN), 'text-purple')}
+        {render_kpi('Auto-DCA', len(GATE), 'text-main')}
+    </div>"""
+
+    nav = f"""<div class="nav-wrapper"><div class="nav-inner">
+    <a href="#{m_code}-buy" class="nav-link">Main</a>
+    <a href="#{m_code}-degen" class="nav-link">Degenerate Radar</a>
+    <a href="#{m_code}-gate" class="nav-link">Auto-DCA</a>
+    <a href="#{m_code}-patterns" class="nav-link">Patterns</a>
+    <a href="#{m_code}-news" class="nav-link">News</a>
+    <a href="#{m_code}-fundy" class="nav-link">Fundamentals</a>
+    </div></div>"""
+
+    return f"""
+    <div id="cont-{m_code}" class="market-container {'active' if m_code=='AUS' else ''}">
+        {nav}
+        <div class="search-container"><input type="text" id="search-{m_code}" class="search-input" placeholder="Search {m_conf['name']}..."></div>
+        <div class="container">
+            <h1 style="margin-bottom:20px">{m_conf['name']}</h1>
+            {kpi_html}
+            {html_cards}
+            
+            <h2 id="{m_code}-degen" style="margin-top:40px">Degenerate Radar (Spec Only)</h2>
+            <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>Sig</th><th>Trend</th><th>Spark</th></tr></thead><tbody>{degen_rows}</tbody></table></div></div>
+            
+            <h2 id="{m_code}-gate" style="margin-top:40px">Auto-DCA Candidates</h2>
+            <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Gap %</th><th>Reclaim?</th><th>EMA21?</th><th>Fill %</th><th>Trend</th></tr></thead><tbody>{gate_rows}</tbody></table></div></div>
+            
+            <h2 id="{m_code}-patterns" style="margin-top:40px">Patterns & Structures</h2>
+            <div class="card"><div class="table-responsive"><table><thead><tr><th>Pattern</th><th>Ticker</th><th>Status</th><th>Conf</th><th>Align</th><th>Mini</th></tr></thead><tbody>{pat_rows}</tbody></table></div></div>
+            
+            <h2 id="{m_code}-news" style="margin-top:40px">News</h2>
+            <div class="card" style="padding:0"><div class="table-responsive"><table><thead><tr><th>Date</th><th>Ticker</th><th>Type</th><th>Headline</th></tr></thead><tbody>{news_rows}</tbody></table></div></div>
+            
+            <h2 id="{m_code}-fundy" style="margin-top:40px">Deep Fundamentals</h2>
+            <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>ROE</th><th>Margin</th><th>Debt/Eq</th><th>Cat</th></tr></thead><tbody>{f_rows}</tbody></table></div></div>
+            
+            <div style="height:50px"></div>
+        </div>
+    </div>
+    """
+
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v5.2...")
+    print("Starting TraderBruh Global Hybrid v5.3...")
     market_htmls, tab_buttons = [], []
     for m, conf in MARKETS.items():
         df, news = process_market(m, conf)
@@ -776,7 +1002,7 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v5.2</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body><div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v5.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body><div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(OUTPUT_HTML, "w", encoding="utf-8") as f: f.write(full)
     print("Done:", OUTPUT_HTML)
