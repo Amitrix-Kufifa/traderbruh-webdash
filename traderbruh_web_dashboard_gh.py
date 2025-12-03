@@ -1,6 +1,6 @@
 # traderbruh_global_hybrid.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 4.2-hybrid (Multi-Market + Degen Radar + Full TA/Fundy Stack)
+# Version: Ultimate 5.1 (Robust Data Engine + Expanded Universe + Degen Radar)
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -44,7 +44,7 @@ BREAKOUT_RULES = {
 }
 AUTO_UPGRADE_BREAKOUT = True
 
-# --- Market Definitions with Categories (Core / Growth / Spec) ---
+# --- Market Definitions ---
 MARKETS = {
     "AUS": {
         "name": "Australia (ASX)",
@@ -52,16 +52,24 @@ MARKETS = {
         "currency": "A$",
         "suffix": ".AX",
         "tickers": {
-            # -- WAAAX & Tech --
+            # -- ETFs & Indices --
+            "A200": ("Betashares A200", "ASX 200 ETF.", "Core"),
+            
+            # -- Tech & WAAAX --
             "XRO": ("Xero", "Cloud accounting globally.", "Growth"),
             "WTC": ("WiseTech", "Logistics software (CargoWise).", "Growth"),
             "TNE": ("TechnologyOne", "Gov/Edu Enterprise SaaS.", "Core"),
             "NXT": ("NEXTDC", "Data Centers (AI Infrastructure).", "Growth"),
+            "ALU": ("Altium", "PCB Design Software.", "Growth"),
             "PME": ("Pro Medicus", "Radiology AI software.", "Growth"),
             "MP1": ("Megaport", "Network-as-a-Service.", "Spec"),
             "CDA": ("Codan", "Comms & Metal Detection.", "Core"),
             "HUB": ("HUB24", "Investment Platform.", "Growth"),
             "NWL": ("Netwealth", "Wealth Platform.", "Growth"),
+            
+            # -- Engineering & Infra --
+            "CVL": ("Civmec", "Defense Shipbuilding/Eng.", "Growth"),
+            "GNP": ("GenusPlus", "Power/Grid Infrastructure.", "Growth"),
             
             # -- Defense & Aero --
             "DRO": ("DroneShield", "Counter-UAS/Drone defense.", "Growth"),
@@ -77,6 +85,7 @@ MARKETS = {
             "BOE": ("Boss Energy", "Uranium producer.", "Growth"),
             "PDN": ("Paladin", "Uranium (Namibia).", "Growth"),
             "DYL": ("Deep Yellow", "Uranium exploration.", "Spec"),
+            "SYR": ("Syrah", "Graphite Anodes.", "Spec"),
             
             # -- Healthcare & Bio --
             "CSL": ("CSL Limited", "Blood plasma & Vaccines.", "Core"),
@@ -86,6 +95,7 @@ MARKETS = {
             "PNV": ("PolyNovo", "Synthetic skin/Wound care.", "Growth"),
             "NAN": ("Nanosonics", "Infection prevention.", "Growth"),
             "NEU": ("Neuren", "Neurodevelopmental drugs.", "Spec"),
+            "RAC": ("Race Oncology", "Anti cancer drugs.", "Growth"),
             
             # -- Blue Chip / Cyclical --
             "BHP": ("BHP Group", "Big Australian Miner.", "Core"),
@@ -102,6 +112,10 @@ MARKETS = {
             "JHX": ("James Hardie", "US Housing materials.", "Core"),
             "ALL": ("Aristocrat", "Gaming & Slots.", "Core"),
             "QAN": ("Qantas", "Airline & Loyalty.", "Core"),
+            
+            # -- Spec/Degen --
+            "ZIP": ("Zip Co", "BNPL/Fintech.", "Spec"),
+            "BRN": ("BrainChip", "Neuromorphic AI.", "Spec"),
         },
     },
     "USA": {
@@ -151,6 +165,7 @@ MARKETS = {
             "LLY":  ("Eli Lilly", "GLP-1 Weight loss leader.", "Core"),
             "NVO":  ("Novo Nordisk", "Ozempic/Wegovy.", "Core"),
             "VRTX": ("Vertex", "Cystic Fibrosis/Gene editing.", "Core"),
+            "BMRN": ("BioMarin", "Biotech: Genetic therapies.", "Growth"),
             
             # -- Defense & Industrial --
             "LMT":  ("Lockheed", "Defense contractor.", "Core"),
@@ -166,7 +181,10 @@ MARKETS = {
             "SOFI": ("SoFi", "Neobank/Student Loans.", "Growth"),
             "FUBO": ("FuboTV", "Sports Streaming.", "Spec"),
             "PGY":  ("Pagaya", "AI Lending.", "Spec"),
-            "BMNR": ("BitMine", "Crypto Mining Hardware.", "Growth"),
+            "GME":  ("GameStop", 'Video Game Retailer', "Spec"),
+            
+            # -- True Degens --
+            "BMNR": ("BitMine", "Crypto Mining Hardware.", "Spec"),
         },
     },
     "IND": {
@@ -223,13 +241,17 @@ MARKETS = {
     },
 }
 
-# ---------------- Helper Functions ----------------
+# ---------------- Robust Data Fetcher ----------------
 
 def fetch_prices(symbol: str, tz_name: str) -> pd.DataFrame:
     """
-    Fetch OHLCV history and stitch today's intraday bar if the local market is open.
+    Fetch OHLCV history with robust handling for:
+    - MultiIndex columns (e.g. Price / Close / Volume under ticker)
+    - Empty results for a given period (fallback to 'max')
+    - Odd column names ('Price' vs 'Close')
     """
     try:
+        # --- 1) First attempt: configured FETCH_DAYS window ---
         df = yf.download(
             symbol,
             period=f"{FETCH_DAYS}d",
@@ -239,25 +261,69 @@ def fetch_prices(symbol: str, tz_name: str) -> pd.DataFrame:
             group_by="column",
             prepost=False,
         )
+
+        # Fallback: some tickers only behave with period='max'
         if df is None or df.empty:
+            print(f"[WARN] Empty download for {symbol} with period={FETCH_DAYS}d, retrying with period='max'")
+            df = yf.download(
+                symbol,
+                period="max",
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+                group_by="column",
+                prepost=False,
+            )
+
+        if df is None or df.empty:
+            print(f"[WARN] No price data for {symbol} even with period='max'")
             return pd.DataFrame()
 
-        # Flatten multi-index if needed
+        # --- 2) Flatten MultiIndex, if any ---
         if isinstance(df.columns, pd.MultiIndex):
-            try:
+            # Typical yfinance shape: (Field, Ticker) → (Open, High, Low, Close, Volume) x symbol
+            if symbol in df.columns.get_level_values(-1):
                 df = df.xs(symbol, axis=1, level=-1, drop_level=True)
-            except Exception:
+            else:
+                # Fallback: just use the top level names
                 df.columns = df.columns.get_level_values(0)
 
-        df = df[["Open", "High", "Low", "Close", "Volume"]].reset_index()
-        date_col = "Date" if "Date" in df.columns else df.columns[0]
-        df["Date"] = pd.to_datetime(df[date_col], utc=True)
+        # --- 3) Normalise column names to Open/High/Low/Close/Volume ---
+        col_map = {}
+        for col in df.columns:
+            c = str(col).lower()
+            if c == "open":
+                col_map[col] = "Open"
+            elif c == "high":
+                col_map[col] = "High"
+            elif c == "low":
+                col_map[col] = "Low"
+            elif c in ("close", "price"):  # some feeds expose 'Price' instead of 'Close'
+                col_map[col] = "Close"
+            elif "volume" in c:
+                col_map[col] = "Volume"
 
+        df = df.rename(columns=col_map)
+
+        needed = ["Open", "High", "Low", "Close", "Volume"]
+        missing = [c for c in needed if c not in df.columns]
+        if missing:
+            print(f"[WARN] Missing columns {missing} for {symbol}; got {list(df.columns)}")
+            return pd.DataFrame()
+
+        # Reset index to get the date column explicitly
+        df = df[needed].reset_index()
+        date_col = "Date" if "Date" in df.columns else df.columns[0]
+        df["Date"] = pd.to_datetime(df[date_col], utc=True, errors="coerce")
+
+        # --- 4) Intraday stitch (keep your existing logic if you like it) ---
         market_tz = zoneinfo.ZoneInfo(tz_name)
         now_mkt = datetime.now(market_tz)
+
+        # Last bar date in market time
         last_date_mkt = df["Date"].dt.tz_convert(market_tz).dt.date.max()
 
-        # If market is active (after 10am local) and today's bar isn't present, approximate with 60m data
+        # If it's after 10am local and we don't yet have today's daily bar, try to stitch a 60m bar
         if (now_mkt.time() >= time(10, 0)) and (last_date_mkt < now_mkt.date()):
             try:
                 intr = yf.download(
@@ -271,35 +337,34 @@ def fetch_prices(symbol: str, tz_name: str) -> pd.DataFrame:
                 )
                 if intr is not None and not intr.empty:
                     if isinstance(intr.columns, pd.MultiIndex):
-                        try:
+                        if symbol in intr.columns.get_level_values(-1):
                             intr = intr.xs(symbol, axis=1, level=-1, drop_level=True)
-                        except Exception:
+                        else:
                             intr.columns = intr.columns.get_level_values(0)
                     intr = intr.reset_index()
-                    intr["Date"] = pd.to_datetime(intr[intr.columns[0]], utc=True)
+                    intr["Date"] = pd.to_datetime(intr[intr.columns[0]], utc=True, errors="coerce")
                     last = intr.tail(1).iloc[0]
-                    top = pd.DataFrame(
-                        [
-                            {
-                                "Date": last["Date"],
-                                "Open": float(last["Open"]),
-                                "High": float(last["High"]),
-                                "Low": float(last["Low"]),
-                                "Close": float(last["Close"]),
-                                "Volume": float(last["Volume"]),
-                            }
-                        ]
-                    )
+                    top = pd.DataFrame([{
+                        "Date": last["Date"],
+                        "Open": float(last["Open"]),
+                        "High": float(last["High"]),
+                        "Low": float(last["Low"]),
+                        "Close": float(last["Close"]),
+                        "Volume": float(last["Volume"]),
+                    }])
                     df = pd.concat([df, top], ignore_index=True)
-            except Exception:
-                pass
+            except Exception as e:
+                pass # Silent fail on stitching is fine
 
-        # Convert to local tz then drop tz info for Plotly
+        # --- 5) Convert to naive local dates & clean ---
         df["Date"] = df["Date"].dt.tz_convert(market_tz).dt.tz_localize(None)
-        return df.dropna(subset=["Close"])
-    except Exception:
-        return pd.DataFrame()
+        df = df.dropna(subset=["Close"])
 
+        return df
+
+    except Exception as e:
+        print(f"[ERROR] fetch_prices failed for {symbol}: {e}")
+        return pd.DataFrame()
 
 def fetch_deep_fundamentals(symbol: str):
     """
@@ -814,89 +879,72 @@ def is_euphoria(r: pd.Series) -> bool:
 
 def comment_for_row(r: pd.Series) -> str:
     """
-    Core comment logic incorporating technical signal, fundamentals, and category.
+    TraderBruh Logic v2: 
+    - Now with smarter 'Watch' logic to distinguish between 'Breakouts' and 'Repair Jobs'.
     """
     d200 = r["Dist_to_SMA200_%"]
-    d52 = r["Dist_to_52W_High_%"]
-    rsi = r["RSI14"]
-    sig = str(r.get("Signal", "")).upper()
+    d52  = r["Dist_to_52W_High_%"] # This is negative, e.g., -5.0
+    dist_high = abs(d52)           # Positive number for logic, e.g., 5.0
+    rsi  = r["RSI14"]
+    sig  = str(r.get("Signal", "")).upper()
     f_score = r.get("Fundy_Score", 0)
-    cat = str(r.get("Category", "Core"))
+    cat  = str(r.get("Category", "Core"))
+    eup  = is_euphoria(r)
 
-    # Adjust nomenclature
-    is_spec_bucket = (cat.lower() == "spec")
+    # Context variables
+    is_degen = (cat.lower() == "spec")
+    is_trash = (f_score < 4)
+    is_fortress = (f_score >= 7)
 
-    # Matrix Logic (base)
+    base = ""
+
+    # --- 1. BUY SIGNAL ---
     if sig == "BUY":
-        if f_score >= 7:
-            base = (
-                "<b>CORE BUY (High Conviction):</b> Strong technical uptrend backed by "
-                f"Fortress/Quality fundamentals ({f_score}/10)."
-            )
-        elif f_score <= 3:
-            base = (
-                "<b>SPECULATIVE BUY:</b> Uptrend in price, but weak fundamentals "
-                f"({f_score}/10). Tight risk management only."
-            )
+        if is_fortress:
+            base = f"<b>🚀 ROCKET FUEL (High Conviction):</b> Strong Uptrend + Fortress Shield ({f_score}/10). Scale in."
+        elif is_trash:
+            base = f"<b>🗑️ TRASH RALLY:</b> Price is flying, but fundys are broken ({f_score}/10). Trade only, tight stops."
         else:
-            base = (
-                "Standard Buy: Uptrend intact (close > 200DMA). "
-                f"RSI {rsi:.0f} is constructive. Fundys OK ({f_score}/10)."
-            )
-    elif sig == "DCA":
-        if f_score <= 3:
-            base = (
-                "<b>AVOID (Falling Knife):</b> Technicals suggest a dip-buy, but "
-                f"fundamentals ({f_score}/10) are weak. High risk of value trap."
-            )
-        elif f_score >= 7:
-            base = (
-                "<b>QUALITY DIP (Accumulate):</b> Fortress balance sheet "
-                f"({f_score}/10) near 200DMA. Attractive DCA zone."
-            )
-        else:
-            base = (
-                "DCA Zone: Trading near 200DMA (Δ "
-                f"{d200:.1f}%) with cooling RSI. Decent risk/reward."
-            )
-    elif sig == "WATCH":
-        if is_euphoria(r):
-            if f_score <= 3:
-                base = (
-                    "<b>EXIT WARNING:</b> Weak fundamentals in euphoria zone "
-                    f"({abs(d52):.1f}% off high). Consider de-risking."
-                )
-            else:
-                base = (
-                    "Euphoria Zone: Price extended. Quality hold, but trimming or "
-                    "tighter trailing stops makes sense."
-                )
-        else:
-            if f_score >= 7:
-                base = (
-                    "<b>GOLDEN WATCHLIST:</b> High quality "
-                    f"({f_score}/10) near potential inflection. Wait for clean setup."
-                )
-            else:
-                base = f"Watch: {abs(d52):.1f}% off highs. Momentum mixed."
-    elif sig == "AVOID":
-        if f_score >= 7:
-            base = (
-                "<b>VALUE WATCH:</b> Great business "
-                f"({f_score}/10) in a downtrend. Do not catch falling knives; "
-                "wait for basing and trend repair."
-            )
-        else:
-            base = (
-                f"Avoid: Weak trend (Δ 200DMA {d200:.1f}%) with weak fundamentals "
-                f"({f_score}/10). Better opportunities elsewhere."
-            )
-    else:
-        base = "Neutral."
+            base = f"<b>✅ STANDARD BUY:</b> Healthy trend > 200DMA. Fundys OK ({f_score}/10). Starter size."
 
-    # Overlay: bucket = Spec -> explicitly label as Degenerate Radar candidate
-    if is_spec_bucket:
-        base += " <b>[Degenerate Radar / High-Risk Speculative]</b>"
+    # --- 2. DCA SIGNAL ---
+    elif sig == "DCA":
+        if is_trash:
+            base = f"<b>🩸 TOXIC KNIFE:</b> Dip looks cheap, but Shield is {f_score}/10. Don't catch it."
+        elif is_fortress:
+            base = f"<b>💎 COMPOUNDER ON SALE:</b> Rare pullback on a 7+ Quality stock. Patient money adds here."
+        else:
+            base = f"<b>📉 SWING ZONE:</b> Near 200DMA (Δ{d200:.1f}%) with RSI cooling. Decent bounce play."
+
+    # --- 3. WATCH SIGNAL (The Big Fix) ---
+    elif sig == "WATCH":
+        if eup:
+            base = f"<b>🍾 EUPHORIA ZONE:</b> Everyone loves it right now. Price stretched. Don't chase."
+        elif is_fortress:
+            base = f"<b>🎯 SNIPER LIST:</b> Elite quality ({f_score}/10) drifting. Stalk this for a setup."
+        else:
+            # GRANULAR WATCH LOGIC
+            if dist_high < 5.0:
+                base = f"<b>🚪 KNOCKING ON THE DOOR:</b> Coiling just {dist_high:.1f}% below highs. Watch for a breakout on Volume."
+            elif dist_high > 20.0:
+                base = f"<b>🤕 RECOVERY WARD:</b> Down {dist_high:.1f}% from highs. Needs time to repair the chart structure."
+            elif rsi > 60:
+                base = f"<b>🔥 HEATING UP:</b> Momentum is building (RSI {rsi:.0f}), but entry isn't clean yet."
+            else:
+                base = f"<b>💤 CHOP CITY:</b> Stuck in no-man's land ({dist_high:.1f}% off highs). Capital is dead money here."
+
+    # --- 4. AVOID SIGNAL ---
+    elif sig == "AVOID":
+        if is_fortress:
+            base = f"<b>🥶 VALUE TRAP:</b> Great business ({f_score}/10) but the trend is broken. Wait for a base."
+        else:
+            base = f"<b>💀 RADIOACTIVE:</b> Broken chart + Weak business. Delete from watchlist."
+    
+    else:
+        base = "Neutral. No edge found."
+
+    if is_degen:
+        base += " <br><i>⚠️ <b>DEGEN WARNING:</b> Spec play. Casino money only.</i>"
 
     return base
 
@@ -1009,90 +1057,6 @@ def mini_spark(ind: pd.DataFrame) -> str:
     )
     return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={"displayModeBar": False, "staticPlot": True})
 
-# ---------------- ASX Announcements Parsing ----------------
-
-def parse_announcements(market_code: str) -> pd.DataFrame:
-    """
-    Only parse PDFs for ASX announcements (Appendix 3Y etc.).
-    Other markets return an empty DataFrame.
-    """
-    if market_code != "AUS":
-        return pd.DataFrame(columns=["Date", "Ticker", "Type", "Tag", "Headline", "Details", "Path", "Recent"])
-
-    NEWS_TYPES_REGEX = [
-        ("Appendix 3Y", r"Appendix\s*3Y|Change of Director.?s? Interest Notice", "director"),
-        ("Appendix 2A", r"Appendix\s*2A|Application for quotation of securities", "issue"),
-        ("Cleansing Notice", r"Cleansing Notice", "issue"),
-        ("Price Query", r"Price Query|Aware Letter|Response to ASX Price Query", "reg"),
-        ("Share Price Movement", r"Share Price Movement", "reg"),
-        ("Trading Halt", r"Trading Halt", "reg"),
-        ("Withdrawal", r"withdrawn", "reg"),
-        ("Orders / Contracts", r"order|contract|sale|revenue|cash receipts", "ops"),
-    ]
-
-    def parse_3y_stats(text: str):
-        act = "Disposed" if re.search(r"\bDisposed\b", text, re.I) else ("Acquired" if re.search(r"\bAcquired\b", text, re.I) else None)
-        shares, value = None, None
-        m = re.search(r"(\d{1,3}(?:,\d{3}){1,3})\s+(?:ordinary|fully\s+paid|shares)", text, re.I)
-        if m:
-            shares = m.group(1)
-        v = re.search(r"\$ ?([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)", text)
-        if v:
-            value = v.group(1)
-        parts = [p for p in [act, f"{shares} shares" if shares else None, f"A${value}" if value else None] if p]
-        return " • ".join(parts) if parts else None
-
-    def read_pdf_first_text(path: str) -> str:
-        if not HAVE_PYPDF:
-            return ""
-        try:
-            txt = PdfReader(path).pages[0].extract_text() or ""
-            return re.sub(r"[ \t]+", " ", txt)
-        except Exception:
-            return ""
-
-    rows = []
-    today_syd = datetime.now(zoneinfo.ZoneInfo("Australia/Sydney")).date()
-    if not os.path.isdir(ANN_DIR):
-        return pd.DataFrame(columns=["Date", "Ticker", "Type", "Tag", "Headline", "Details", "Path", "Recent"])
-
-    for fp in sorted(glob.glob(os.path.join(ANN_DIR, "*.pdf"))):
-        fname = os.path.basename(fp)
-        m = re.match(r"([A-Z]{2,4})[_-]", fname)
-        ticker = m.group(1) if m else None
-        text = read_pdf_first_text(fp)
-        combined = fname + " " + text
-        _type, tag = next(
-            ((label, t) for (label, patt, t) in NEWS_TYPES_REGEX if re.search(patt, combined, re.I)),
-            ("Announcement", "gen"),
-        )
-        d = None
-        md = re.search(r"(\d{1,2}\s+[A-Za-z]{3,9}\s+20\d{2})", text)
-        if md:
-            for fmt in ("%d %B %Y", "%d %b %Y"):
-                try:
-                    d = datetime.strptime(md.group(1), fmt)
-                    break
-                except Exception:
-                    continue
-        if d is None:
-            d = datetime.fromtimestamp(os.path.getmtime(fp)).replace(tzinfo=None)
-        details = parse_3y_stats(text) if _type == "Appendix 3Y" else None
-        is_recent = (today_syd - d.date()).days <= NEWS_WINDOW_DAYS
-        rows.append(
-            {
-                "Date": d.date().isoformat(),
-                "Ticker": ticker or "",
-                "Type": _type,
-                "Tag": tag,
-                "Headline": _type,
-                "Details": details or "",
-                "Path": fp,
-                "Recent": is_recent,
-            }
-        )
-    return pd.DataFrame(rows)
-
 # ---------------- Analysis Pipeline ----------------
 
 def process_market(market_code: str, market_conf: dict):
@@ -1122,9 +1086,10 @@ def process_market(market_code: str, market_conf: dict):
 
         fundy = fetch_deep_fundamentals(full_sym)
 
-    # REMOVED 'SMA200' and 'SMA50' from the mandatory list
-        ind = indicators(df).dropna(subset=['High20', 'RSI14', 'EMA21', 'Vol20', 'ATR14'])
-	
+        # RELAXED FILTER: Removed SMA200/SMA50 so gaps don't kill data
+        ind = indicators(df).dropna(
+            subset=["High20", "RSI14", "EMA21", "Vol20", "ATR14"]
+        )
         if ind.empty:
             continue
         last = ind.iloc[-1]
@@ -1163,6 +1128,10 @@ def process_market(market_code: str, market_conf: dict):
         elif pbias == "bearish" and sig_str not in ("avoid", "watch"):
             palign = "CONFLICT"
 
+        # Hard Gate Override: Core/Growth with low score -> Force AVOID
+        if t_cat != 'Spec' and fundy['score'] < 4:
+            sig = 'AVOID'
+
         snaps.append(
             {
                 "Ticker": t_key,
@@ -1171,13 +1140,13 @@ def process_market(market_code: str, market_conf: dict):
                 "Category": t_cat,
                 "LastDate": pd.to_datetime(last["Date"]).strftime("%Y-%m-%d"),
                 "LastClose": float(last["Close"]),
-                "SMA20": float(last["SMA20"]),
-                "SMA50": float(last["SMA50"]),
-                "SMA200": float(last["SMA200"]),
+                "SMA20": float(last.get("SMA200", 0.0)),  # Safe get for relaxed filter
+                "SMA50": float(last.get("SMA50", 0.0)),
+                "SMA200": float(last.get("SMA200", 0.0)),
                 "RSI14": float(last["RSI14"]),
                 "High52W": float(last["High52W"]),
                 "Dist_to_52W_High_%": float(last["Dist_to_52W_High_%"]),
-                "Dist_to_SMA200_%": float(last["Dist_to_SMA200_%"]),
+                "Dist_to_SMA200_%": float(last.get("Dist_to_SMA200_%", 0.0)),
                 "Signal": sig,
                 "SignalAuto": bool(signal_auto),
                 "Comment": None,
@@ -1252,731 +1221,10 @@ def process_market(market_code: str, market_conf: dict):
     final_df = pd.DataFrame(rows)
     return final_df, news_df
 
-# ---------------- HTML Generation ----------------
-
-CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-:root {
-    --bg: #0f172a; --surface-1: #1e293b; --surface-2: #334155; --primary: #3b82f6;
-    --text-main: #f1f5f9; --text-muted: #94a3b8;
-    --accent-green: #10b981; --accent-amber: #f59e0b; --accent-red: #ef4444; --accent-purple: #a855f7;
-    --glass: rgba(30, 41, 59, 0.7); --border: rgba(148, 163, 184, 0.1);
-}
-* { box-sizing: border-box; -webkit-font-smoothing: antialiased; }
-body {
-    background: var(--bg);
-    background-image:
-        radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.1) 0px, transparent 50%),
-        radial-gradient(at 100% 100%, rgba(168, 85, 247, 0.1) 0px, transparent 50%);
-    background-attachment: fixed;
-    color: var(--text-main);
-    font-family: 'Inter', sans-serif;
-    margin: 0;
-    padding-bottom: 60px;
-    font-size: 14px;
-}
-.mono { font-family: 'JetBrains Mono', monospace; }
-.text-green { color: var(--accent-green); }
-.text-red { color: var(--accent-red); }
-.text-amber { color: var(--accent-amber); }
-.text-purple { color: var(--accent-purple); }
-.text-primary { color: var(--primary); }
-.hidden { display: none !important; }
-
-/* Market Tabs */
-.market-tabs {
-    position: sticky;
-    top: 0;
-    z-index: 200;
-    background: #020617;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    justify-content: center;
-    gap: 10px;
-    padding: 10px;
-}
-.market-tab {
-    background: transparent;
-    border: 1px solid var(--text-muted);
-    color: var(--text-muted);
-    padding: 8px 20px;
-    border-radius: 999px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: 0.2s;
-}
-.market-tab.active {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: white;
-}
-
-/* Internal Nav */
-.nav-wrapper {
-    position: sticky;
-    top: 53px;
-    z-index: 100;
-    background: rgba(15, 23, 42, 0.85);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
-    padding: 10px 16px;
-}
-.nav-inner {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    max-width: 1200px;
-    margin: 0 auto;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-}
-.nav-inner::-webkit-scrollbar { display: none; }
-.nav-link {
-    white-space: nowrap;
-    color: var(--text-muted);
-    text-decoration: none;
-    padding: 6px 14px;
-    border-radius: 999px;
-    font-size: 13px;
-    font-weight: 500;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid transparent;
-    transition: all 0.2s;
-}
-.nav-link:hover, .nav-link.active {
-    background: rgba(255,255,255,0.1);
-    color: white;
-    border-color: rgba(255,255,255,0.1);
-}
-
-.market-container { display: none; }
-.market-container.active { display: block; animation: fadein 0.3s; }
-@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
-
-.search-container {
-    max-width: 1200px;
-    margin: 16px auto 0;
-    padding: 0 16px;
-}
-.search-input {
-    width: 100%;
-    background: var(--glass);
-    border: 1px solid var(--border);
-    padding: 12px 16px;
-    border-radius: 12px;
-    color: white;
-    font-family: 'Inter';
-    font-size: 15px;
-    outline: none;
-    transition: border-color 0.2s;
-}
-.search-input:focus { border-color: var(--primary); }
-
-.container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 20px 16px;
-}
-.grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-    gap: 16px;
-}
-@media(max-width: 600px) {
-    .grid { grid-template-columns: 1fr; }
-}
-
-.card {
-    background: var(--glass);
-    backdrop-filter: blur(10px);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 16px;
-    overflow: hidden;
-    position: relative;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-}
-.card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 10px;
-}
-.ticker-badge {
-    background: rgba(255,255,255,0.05);
-    padding: 4px 8px;
-    border-radius: 6px;
-    font-weight: 700;
-    font-size: 15px;
-    letter-spacing: 0.5px;
-    color: white;
-    text-decoration: none;
-    display: inline-block;
-}
-.price-block { text-align: right; }
-.price-main { font-size: 18px; font-weight: 600; }
-.price-sub { font-size: 11px; color: var(--text-muted); }
-
-.metrics-row {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-    margin-bottom: 12px;
-    background: rgba(0,0,0,0.2);
-    padding: 8px;
-    border-radius: 8px;
-}
-.metric { display: flex; flex-direction: column; }
-.metric label {
-    font-size: 10px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-}
-.metric span { font-size: 13px; font-weight: 500; }
-
-.comment-box {
-    font-size: 13px;
-    line-height: 1.5;
-    color: #cbd5e1;
-    margin-bottom: 12px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border);
-}
-
-.playbook {
-    background: rgba(0,0,0,0.2);
-    padding: 12px;
-    border-radius: 8px;
-    margin-bottom: 16px;
-    font-size: 13px;
-    color: #e2e8f0;
-    line-height: 1.6;
-}
-.playbook b { color: white; }
-
-.badge {
-    padding: 3px 8px;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    display: inline-block;
-}
-.badge.buy {
-    background: rgba(16, 185, 129, 0.15);
-    color: var(--accent-green);
-    border: 1px solid rgba(16, 185, 129, 0.2);
-}
-.badge.dca {
-    background: rgba(245, 158, 11, 0.15);
-    color: var(--accent-amber);
-    border: 1px solid rgba(245, 158, 11, 0.2);
-}
-.badge.watch {
-    background: rgba(59, 130, 246, 0.15);
-    color: var(--primary);
-    border: 1px solid rgba(59, 130, 246, 0.2);
-}
-.badge.avoid {
-    background: rgba(239, 68, 68, 0.15);
-    color: var(--accent-red);
-    border: 1px solid rgba(239, 68, 68, 0.2);
-}
-.badge.news {
-    background: rgba(168, 85, 247, 0.15);
-    color: var(--accent-purple);
-}
-
-.badge.shield-high {
-    background: rgba(16, 185, 129, 0.15);
-    color: var(--accent-green);
-    border: 1px solid rgba(16, 185, 129, 0.2);
-}
-.badge.shield-low {
-    background: rgba(239, 68, 68, 0.15);
-    color: var(--accent-red);
-    border: 1px solid rgba(239, 68, 68, 0.2);
-}
-
-.euphoria-glow {
-    box-shadow: 0 0 15px rgba(245, 158, 11, 0.25);
-    border-color: rgba(245, 158, 11, 0.4);
-}
-
-.kpi-scroll {
-    display: flex;
-    gap: 12px;
-    overflow-x: auto;
-    padding-bottom: 8px;
-    margin-bottom: 24px;
-    scrollbar-width: none;
-}
-.kpi-scroll::-webkit-scrollbar { display: none; }
-.kpi-card {
-    min-width: 140px;
-    background: var(--surface-1);
-    border-radius: 12px;
-    padding: 12px;
-    border: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-}
-.kpi-val {
-    font-size: 24px;
-    font-weight: 700;
-    line-height: 1;
-    margin-top: 4px;
-}
-.kpi-lbl {
-    font-size: 11px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.table-responsive {
-    overflow-x: auto;
-    border-radius: 12px;
-    border: 1px solid var(--border);
-}
-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-}
-th {
-    text-align: left;
-    padding: 12px 16px;
-    color: var(--text-muted);
-    font-weight: 500;
-    border-bottom: 1px solid var(--border);
-    background: rgba(15, 23, 42, 0.5);
-    white-space: nowrap;
-    cursor: pointer;
-}
-td {
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border);
-    vertical-align: middle;
-}
-tr:last-child td { border-bottom: none; }
-tr:hover td { background: rgba(255,255,255,0.02); }
-
-.chart-container {
-    margin-top: 10px;
-    border-radius: 8px;
-    overflow: hidden;
-    border: 1px solid rgba(255,255,255,0.05);
-}
-"""
-
-JS = """
-function switchMarket(code) {
-    document.querySelectorAll('.market-container').forEach(el => el.classList.remove('active'));
-    document.getElementById('cont-' + code).classList.add('active');
-    document.querySelectorAll('.market-tab').forEach(el => el.classList.remove('active'));
-    document.getElementById('tab-' + code).classList.add('active');
-}
-
-function init() {
-    document.querySelectorAll('.search-input').forEach(input => {
-        input.addEventListener('input', (e) => {
-            const query = e.target.value.toLowerCase();
-            const activeCont = document.querySelector('.market-container.active');
-            if (!activeCont) return;
-            activeCont.querySelectorAll('.searchable-item').forEach(item => {
-                const text = item.innerText.toLowerCase();
-                item.classList.toggle('hidden', !text.includes(query));
-            });
-        });
-    });
-
-    document.querySelectorAll('th').forEach(th => {
-        th.addEventListener('click', () => {
-            const table = th.closest('table');
-            const tbody = table.querySelector('tbody');
-            const rows = Array.from(tbody.querySelectorAll('tr'));
-            const idx = Array.from(th.parentNode.children).indexOf(th);
-            const asc = th.dataset.asc === 'true';
-            rows.sort((a, b) => {
-                const v1 = a.children[idx].innerText;
-                const v2 = b.children[idx].innerText;
-                const n1 = parseFloat(v1.replace(/[^0-9.-]/g, ''));
-                const n2 = parseFloat(v2.replace(/[^0-9.-]/g, ''));
-                if (!isNaN(n1) && !isNaN(n2)) return asc ? n1 - n2 : n2 - n1;
-                return asc ? v1.localeCompare(v2) : v2.localeCompare(v1);
-            });
-            rows.forEach(r => tbody.appendChild(r));
-            th.dataset.asc = (!asc).toString();
-        });
-    });
-}
-window.addEventListener('DOMContentLoaded', init);
-"""
-
-def render_card(r: pd.Series, badge_type: str, curr: str) -> str:
-    euphoria_cls = "euphoria-glow" if is_euphoria(r) else ""
-    euphoria_tag = (
-        '<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;margin-left:6px">Euphoria</span>'
-        if is_euphoria(r) else ""
-    )
-    news_tag = (
-        '<span class="badge news" style="margin-left:6px">News</span>'
-        if "News:" in (r["Comment"] or "") else ""
-    )
-
-    # Fundamental badge
-    score = r["Fundy_Score"]
-    if score >= 7:
-        s_badge = "shield-high"
-    elif score <= 3:
-        s_badge = "shield-low"
-    else:
-        s_badge = "buy"
-    if score == 10:
-        s_icon = "💎"
-    elif score >= 7:
-        s_icon = "🛡️"
-    elif score <= 3:
-        s_icon = "⚠️"
-    else:
-        s_icon = "⚖️"
-    fundy_html = (
-        f'<span class="badge {s_badge}" style="margin-left:6px">'
-        f'{s_icon} {score}/10 {r["Fundy_Tier"]}</span>'
-    )
-
-    # Category badge
-    cat = str(r.get("Category", "Core"))
-    cat_lower = cat.lower()
-    if cat_lower == "core":
-        bucket_html = (
-            '<span class="badge" style="margin-left:6px;'
-            'background:rgba(56,189,248,0.14);color:#38bdf8;'
-            'border:1px solid rgba(56,189,248,0.4)">Core</span>'
-        )
-    elif cat_lower == "growth":
-        bucket_html = (
-            '<span class="badge" style="margin-left:6px;'
-            'background:rgba(16,185,129,0.12);color:#22c55e;'
-            'border:1px solid rgba(34,197,94,0.5)">Growth</span>'
-        )
-    elif cat_lower == "spec":
-        bucket_html = (
-            '<span class="badge" style="margin-left:6px;'
-            'background:rgba(239,68,68,0.12);color:#f97373;'
-            'border:1px solid rgba(248,113,113,0.6)">Degenerate</span>'
-        )
-    else:
-        bucket_html = ""
-
-    rsi_color = (
-        "#ef4444" if r["RSI14"] > 70 else ("#10b981" if r["RSI14"] > 45 else "#f59e0b")
-    )
-
-    return f"""
-    <div class="card searchable-item {euphoria_cls}">
-        <div class="card-header">
-            <div>
-                <a href="#" class="ticker-badge mono">{r['Ticker']}</a>
-                <span class="badge {badge_type}" style="margin-left:8px">{r['Signal']}</span>
-                {fundy_html} {bucket_html} {euphoria_tag} {news_tag}
-                <div style="font-size:12px; color:var(--text-muted); margin-top:4px">
-                    {r['Name']}
-                </div>
-            </div>
-            <div class="price-block">
-                <div class="price-main mono">{curr}{r['LastClose']:.2f}</div>
-                <div class="price-sub">{r['LastDate']}</div>
-            </div>
-        </div>
-        <div class="metrics-row">
-            <div class="metric">
-                <label>RSI(14)</label>
-                <span class="mono" style="color:{rsi_color}">{r['RSI14']:.0f}</span>
-            </div>
-            <div class="metric">
-                <label>vs 200DMA</label>
-                <span class="mono">{r['Dist_to_SMA200_%']:+.1f}%</span>
-            </div>
-            <div class="metric">
-                <label>vs 52W High</label>
-                <span class="mono">{r['Dist_to_52W_High_%']:+.1f}%</span>
-            </div>
-        </div>
-        <div class="comment-box">{r['Comment']}</div>
-        <div class="chart-container">{r['_mini_candle']}</div>
-    </div>
-    """
-
-def render_kpi(label: str, val, color_cls: str) -> str:
-    return f"""
-    <div class="kpi-card">
-        <div class="kpi-lbl">{label}</div>
-        <div class="kpi-val {color_cls}">{val}</div>
-    </div>
-    """
-
-def render_market_html(m_code: str, m_conf: dict, snaps_df: pd.DataFrame, news_df: pd.DataFrame) -> str:
-    if snaps_df.empty:
-        return f"<div id='cont-{m_code}' class='market-container'><div style='padding:50px;text-align:center'>No data for {m_code}</div></div>"
-
-    # Split Core+Growth vs Spec
-    mask_spec = snaps_df["Category"].str.lower() == "spec"
-    CORE = snaps_df[~mask_spec].copy()
-    DEGEN = snaps_df[mask_spec].copy()
-
-    BUY = CORE[CORE.Signal == "BUY"].sort_values(
-        ["Fundy_Score", "Dist_to_52W_High_%"], ascending=[False, False]
-    )
-    DCA = CORE[CORE.Signal == "DCA"].sort_values(
-        ["Fundy_Score", "Dist_to_SMA200_%"], ascending=[False, True]
-    )
-    WATCH = CORE[CORE.Signal == "WATCH"].sort_values(
-        ["Fundy_Score", "Dist_to_52W_High_%"], ascending=[False, False]
-    )
-    AVOID = CORE[CORE.Signal == "AVOID"].sort_values(
-        "Fundy_Score", ascending=True
-    )
-
-    GATE = CORE[CORE["AutoDCA_Flag"] == True].sort_values(
-        "AutoDCA_Fill_%", ascending=False
-    )
-    PATS = CORE[CORE["_pattern_name"] != ""].sort_values(
-        ["_pattern_conf", "Ticker"], ascending=[False, True]
-    )
-
-    BRKCOUNT = int(CORE["BreakoutReady"].sum())
-    NEWSCOUNT = len(news_df)
-
-    curr = m_conf["currency"]
-
-    # Cards
-    html_cards = []
-    for section, df, badge in [
-        ("BUY — Actionable", BUY, "buy"),
-        ("DCA — Accumulate", DCA, "dca"),
-        ("WATCH — Monitoring", WATCH, "watch"),
-        ("AVOID — Sidelines", AVOID, "avoid"),
-    ]:
-        if not df.empty:
-            grid_items = "".join(
-                [render_card(r, badge, curr) for _, r in df.iterrows()]
-            )
-            html_cards.append(
-                f"<h2 id='{m_code}-{badge}' style='margin-top:30px; font-size:18px; color:var(--text-muted)'>{section}</h2><div class='grid'>{grid_items}</div>"
-            )
-
-    # KPI ribbon
-    counts = CORE["Signal"].value_counts()
-    kpi_html = f"""
-    <div class="kpi-scroll">
-        {render_kpi('Buy Signals', counts.get('BUY', 0), 'text-green')}
-        {render_kpi('DCA Zone', counts.get('DCA', 0), 'text-amber')}
-        {render_kpi('Watchlist', counts.get('WATCH', 0), 'text-primary')}
-        {render_kpi('Avoid', counts.get('AVOID', 0), 'text-red')}
-        {render_kpi('Breakouts', BRKCOUNT, 'text-green')}
-        {render_kpi('Patterns', len(PATS), 'text-purple')}
-        {render_kpi('Recent News', NEWSCOUNT, 'text-main')}
-    </div>
-    """
-
-    # Auto-DCA table
-    dca_rows = "".join(
-        f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
-        f"<td class='mono text-red'>{r['AutoDCA_Gap_%']:.1f}%</td>"
-        f"<td class='mono'>{'Yes' if r['AutoDCA_ReclaimMid'] else 'No'}</td>"
-        f"<td class='mono'>{'Yes' if r['AutoDCA_AboveEMA21'] else 'No'}</td>"
-        f"<td class='mono'>{r['AutoDCA_Fill_%']:.1f}%</td>"
-        f"<td>{r['_mini_spark']}</td></tr>"
-        for _, r in GATE.iterrows()
-    )
-
-    # Patterns table
-    pat_rows = "".join(
-        f"<tr class='searchable-item'>"
-        f"<td>{r['_pattern_name']}</td>"
-        f"<td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
-        f"<td class='mono'>{r['_pattern_status']}</td>"
-        f"<td class='mono'>{r['_pattern_conf']:.2f}</td>"
-        f"<td class='mono'>{r['_pattern_align']}</td>"
-        f"<td>{r['_mini_candle']}</td></tr>"
-        for _, r in PATS.iterrows()
-    )
-
-    # News table
-    if not news_df.empty:
-        news_rows = "".join(
-            f"<tr class='searchable-item'>"
-            f"<td class='mono' style='color:var(--text-muted)'>{r['Date']}</td>"
-            f"<td><b>{r['Ticker']}</b></td>"
-            f"<td><span class='badge news'>{r['Type']}</span></td>"
-            f"<td>{r['Headline']}</td></tr>"
-            for _, r in news_df.sort_values("Date", ascending=False).iterrows()
-        )
-    else:
-        news_rows = "<tr><td colspan='4' style='text-align:center; color:gray'>No news data (PDFs) available for this region.</td></tr>"
-
-    # Fundamentals table
-    def fmt_pe(x):
-        return f"{x:.1f}" if x and x > 0 else "-"
-
-    def fmt_pct(x):
-        return f"{x*100:.1f}%" if x else "-"
-
-    fundy_rows = "".join(
-        f"<tr class='searchable-item'>"
-        f"<td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
-        f"<td><span class='badge {'shield-high' if r['Fundy_Score']>=7 else ('shield-low' if r['Fundy_Score']<=3 else 'watch')}'>{r['Fundy_Score']}/10 {r['Fundy_Tier']}</span></td>"
-        f"<td class='mono'>{fmt_pct(r['Fundy_ROE'])}</td>"
-        f"<td class='mono'>{fmt_pct(r['Fundy_Margin'])}</td>"
-        f"<td class='mono'>{fmt_pe(r['Fundy_PE'])}</td>"
-        f"<td class='mono'>{fmt_pct(r['Fundy_RevCAGR'])}</td>"
-        f"<td class='mono'>{r['Fundy_Debt']:.2f}</td></tr>"
-        for _, r in CORE.sort_values("Fundy_Score", ascending=False).iterrows()
-    )
-
-    # Degenerate Radar (Spec only)
-    degen_rows = "".join(
-        f"<tr class='searchable-item'>"
-        f"<td><span class='ticker-badge mono'>{r['Ticker']}</span></td>"
-        f"<td>{r['Name']}</td>"
-        f"<td class='mono'>{r['Fundy_Score']}/10</td>"
-        f"<td class='mono'>{r['Signal']}</td>"
-        f"<td>{r['_mini_spark']}</td></tr>"
-        for _, r in DEGEN.sort_values("Fundy_Score", ascending=True).iterrows()
-    )
-    if not degen_rows:
-        degen_rows = "<tr><td colspan='5' style='text-align:center'>No Spec/degenerate names defined for this market.</td></tr>"
-
-    nav_html = f"""
-    <div class="nav-wrapper">
-        <div class="nav-inner">
-            <a href="#" class="nav-link active" style="font-weight:700; color:white">Overview</a>
-            <a href="#{m_code}-buy" class="nav-link">Buy</a>
-            <a href="#{m_code}-dca" class="nav-link">DCA</a>
-            <a href="#{m_code}-watch" class="nav-link">Watch</a>
-            <a href="#{m_code}-fundy" class="nav-link">Fundamentals</a>
-            <a href="#{m_code}-gate" class="nav-link">Auto-DCA</a>
-            <a href="#{m_code}-patterns" class="nav-link">Patterns</a>
-            <a href="#{m_code}-degen" class="nav-link">Degenerate Radar</a>
-            <a href="#{m_code}-news" class="nav-link">News</a>
-        </div>
-    </div>
-    """
-
-    return f"""
-    <div id="cont-{m_code}" class="market-container {'active' if m_code=='AUS' else ''}">
-        {nav_html}
-        <div class="search-container">
-            <input type="text" id="search-{m_code}" class="search-input" placeholder="Search {m_conf['name']}...">
-        </div>
-        <div class="container">
-            <div style="margin-bottom:20px">
-                <h1 style="font-size:24px; margin:0 0 4px 0">{m_conf['name']} Overview</h1>
-                <div style="color:var(--text-muted); font-size:13px">
-                    Updated {datetime.now(zoneinfo.ZoneInfo(m_conf['tz'])).strftime('%I:%M %p %Z')}
-                </div>
-            </div>
-            {kpi_html}
-            {"".join(html_cards)}
-
-            <h2 id="{m_code}-fundy" style="margin-top:40px">Fundamental Health Check</h2>
-            <div class="card">
-                <div class="playbook">
-                    <b>The TraderBruh Shield:</b> 💎 7-10 (Fortress), ⚖️ 4-6 (Quality),
-                    ⚠️ 0-3 (High-Risk). Category tag shows Core / Growth / Degenerate bucket.
-                </div>
-                <div class="table-responsive">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Ticker</th><th>Score</th><th>ROE</th><th>Margin</th>
-                                <th>P/E</th><th>Rev Growth</th><th>Debt/Eq</th>
-                            </tr>
-                        </thead>
-                        <tbody>{fundy_rows}</tbody>
-                    </table>
-                </div>
-            </div>
-
-            <h2 id="{m_code}-gate" style="margin-top:40px">Auto-DCA Candidates</h2>
-            <div class="card">
-                <div class="playbook">
-                    <b>Playbook:</b> Gap-down &lt; {RULES['autodca']['gap_thresh']}%, reclaim mid-gap,
-                    close &gt; EMA21 and &gt;= {RULES['autodca']['fill_req']}% gap-fill.
-                </div>
-                <div class="table-responsive">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Ticker</th><th>Gap %</th><th>Reclaim?</th>
-                                <th>&gt; EMA21?</th><th>Gap-fill %</th><th>Trend</th>
-                            </tr>
-                        </thead>
-                        <tbody>{dca_rows if dca_rows else "<tr><td colspan='6' style='text-align:center'>No setups.</td></tr>"}</tbody>
-                    </table>
-                </div>
-            </div>
-
-            <h2 id="{m_code}-patterns" style="margin-top:40px">Patterns &amp; Structures</h2>
-            <div class="card">
-                <div class="playbook">
-                    <b>Playbook:</b> Confirmed Double Tops/Bottoms, Triangles and H&amp;S in the last {PATTERN_LOOKBACK} days.
-                </div>
-                <div class="table-responsive">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Pattern</th><th>Ticker</th><th>Status</th><th>Conf</th><th>Align</th><th>Mini</th>
-                            </tr>
-                        </thead>
-                        <tbody>{pat_rows if pat_rows else "<tr><td colspan='6' style='text-align:center'>No patterns.</td></tr>"}</tbody>
-                    </table>
-                </div>
-            </div>
-
-            <h2 id="{m_code}-degen" style="margin-top:40px">Degenerate Radar (Spec Only)</h2>
-            <div class="card">
-                <div class="playbook">
-                    <b>High-Risk Speculative Bucket:</b> Names explicitly tagged as Spec.
-                    Treat as lotto tickets, not retirement plans.
-                </div>
-                <div class="table-responsive">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Ticker</th><th>Name</th><th>Shield</th><th>Signal</th><th>Trend</th>
-                            </tr>
-                        </thead>
-                        <tbody>{degen_rows}</tbody>
-                    </table>
-                </div>
-            </div>
-
-            <h2 id="{m_code}-news" style="margin-top:40px">News</h2>
-            <div class="card" style="padding:0">
-                <div class="table-responsive">
-                    <table>
-                        <thead>
-                            <tr><th>Date</th><th>Ticker</th><th>Type</th><th>Headline</th></tr>
-                        </thead>
-                        <tbody>{news_rows}</tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div style="height:50px"></div>
-        </div>
-    </div>
-    """
-
-# ---------------- Main ----------------
+# ---------------- HTML Generation (Uses CSS/JS defined above) ----------------
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid...")
+    print("Starting TraderBruh Global Hybrid v5.1...")
     market_htmls = []
     tab_buttons = []
 
@@ -2005,7 +1253,7 @@ if __name__ == "__main__":
     </div>
     {''.join(market_htmls)}
     <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:12px">
-        Generated by TraderBruh Global v4.2-hybrid • Not Financial Advice
+        Generated by TraderBruh Global v5.1 (Robust) • Not Financial Advice
     </div>
 </body>
 </html>
