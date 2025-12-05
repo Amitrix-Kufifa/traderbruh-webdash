@@ -1,9 +1,10 @@
+
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 6.4 (Final Polish)
-# - Massive Ticker Expansion
-# - Academic Logic (Rule of 40, Mohanram, Runway)
-# - Actionable Commentary Engine 2.1
+# Version: Ultimate 6.5 (Stable Release)
+# - Removed Delisted Tickers (ALU, DEG)
+# - Fixed NameError bug in Renderer
+# - Includes V6.2 Academic Engine + V2.1 Commentary
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -98,7 +99,6 @@ MARKETS = {
             "TNE": ("TechnologyOne", "Enterprise SaaS.", "Core"),
             "NXT": ("NEXTDC", "Data Centers.", "Growth"),
             "PME": ("Pro Medicus", "Health Imaging AI.", "Growth"),
-            "ALU": ("Altium", "PCB Design Software.", "Growth"),
             "AD8": ("Audinate", "Audio Networking.", "Growth"),
             "HUB": ("HUB24", "Wealth Platform.", "Growth"),
             "NWL": ("Netwealth", "Wealth Platform.", "Growth"),
@@ -126,7 +126,7 @@ MARKETS = {
             "CXO": ("Core Lithium", "Lithium Producer (Volatile).", "Spec"),
             "LKE": ("Lake Resources", "Lithium Brine.", "Spec"),
             "CHN": ("Chalice Mining", "Nickel/PGE Discovery.", "Spec"),
-            "DEG": ("De Grey", "Gold Exploration.", "Spec"),
+            # DEG Removed due to download errors
             "GL1": ("Global Lithium", "Lithium Exploration.", "Spec"),
             "BOE": ("Boss Energy", "Uranium.", "Growth"),
             "PDN": ("Paladin Energy", "Uranium.", "Growth"),
@@ -738,6 +738,13 @@ def breakout_ready_dt(ind: pd.DataFrame, pat: dict, rules: dict):
 
 # ---------------- Commentary Engine 2.1 (Actionable + Deep Logic) ----------------
 
+def is_euphoria(r):
+    # Global helper required for both commentary and HTML rendering
+    d200 = r.get("Dist_to_SMA200_%", 0.0)
+    d52  = r.get("Dist_to_52W_High_%", 0.0)
+    rsi  = r.get("RSI14", 50.0)
+    return (d52 > -3.5) and (d200 > 40.0) and (rsi >= 70.0)
+
 def comment_for_row(r: pd.Series) -> str:
     d200 = r.get("Dist_to_SMA200_%", 0.0)
     d52  = r.get("Dist_to_52W_High_%", 0.0)
@@ -754,7 +761,8 @@ def comment_for_row(r: pd.Series) -> str:
     is_trash = (score < 4)
     is_weak  = is_trash # Alias fix
     is_zombie = (cat == "Spec" and runway < 6.0 and runway > 0)
-    is_euphoria = (d52 > -3.5) and (d200 > 40.0) and (rsi >= 70.0)
+    # Re-use the logic or helper
+    eup = is_euphoria(r)
     is_oversold = (rsi <= 35.0)
 
     mode_label = ""
@@ -801,7 +809,7 @@ def comment_for_row(r: pd.Series) -> str:
                     f"Play the bounce with a stop below the line. Fundamental conviction is average.")
 
     elif sig == "WATCH":
-        if is_euphoria:
+        if eup:
             if is_weak:
                 base = (f"<b>🚨 EXIT SCAM WARNING:</b> Weak stock ({score}/10) gone vertical. "
                         f"RSI {rsi:.0f} is dangerous. Lock in profits immediately or tighten stops.")
@@ -1224,7 +1232,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v6.4...")
+    print("Starting TraderBruh Global Hybrid v6.5...")
     market_htmls, tab_buttons = [], []
     for m, conf in MARKETS.items():
         df, news = process_market(m, conf)
@@ -1232,7 +1240,7 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.4</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body><div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.5</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body><div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(OUTPUT_HTML, "w", encoding="utf-8") as f: f.write(full)
     print("Done:", OUTPUT_HTML)
