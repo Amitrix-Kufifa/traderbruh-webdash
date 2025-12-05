@@ -1,5 +1,3 @@
---- START OF FILE traderbruh_web_dashboard_gh.py ---
-
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
 # Version: Ultimate 6.3 (Massive Ticker Expansion + V6.2 Logic)
@@ -1186,4 +1184,3 @@ if __name__ == "__main__":
     with open(OUTPUT_HTML, "w", encoding="utf-8") as f: f.write(full)
     print("Done:", OUTPUT_HTML)
 
---- END OF FILE traderbruh_web_dashboard_gh.py ---
