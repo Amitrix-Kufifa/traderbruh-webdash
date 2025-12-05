@@ -1,8 +1,9 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 6.3 (Massive Ticker Expansion + V6.2 Logic)
-# - Expanded Universe: Core/Growth/Spec across ASX & USA
-# - Academic/VC Logic: Rule of 40, Mohanram, Survival Runway
+# Version: Ultimate 6.4 (Final Polish)
+# - Massive Ticker Expansion
+# - Academic Logic (Rule of 40, Mohanram, Runway)
+# - Actionable Commentary Engine 2.1
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -76,7 +77,7 @@ MARKETS = {
             "STO": ("Santos", "LNG & Gas.", "Core"),
             "S32": ("South32", "Diversified Base Metals.", "Core"),
             "NST": ("Northern Star", "Gold Major.", "Core"),
-            "PLS": ("Pilbara Minerals", "Lithium Major.", "Core"), # Upgraded to Core due to size/cash
+            "PLS": ("Pilbara Minerals", "Lithium Major.", "Core"),
 
             # --- CORE: Industrials, Telco, Staples ---
             "TLS": ("Telstra", "Telecom Infrastructure.", "Core"),
@@ -94,7 +95,7 @@ MARKETS = {
             # --- GROWTH: Tech / Software / Platform ---
             "XRO": ("Xero", "Cloud Accounting.", "Growth"),
             "WTC": ("WiseTech", "Logistics Software.", "Growth"),
-            "TNE": ("TechnologyOne", "Enterprise SaaS.", "Core"), # Stable enough for Core
+            "TNE": ("TechnologyOne", "Enterprise SaaS.", "Core"),
             "NXT": ("NEXTDC", "Data Centers.", "Growth"),
             "PME": ("Pro Medicus", "Health Imaging AI.", "Growth"),
             "ALU": ("Altium", "PCB Design Software.", "Growth"),
@@ -155,7 +156,7 @@ MARKETS = {
             "AMZN": ("Amazon", "E-comm & Cloud.", "Core"),
             "GOOG": ("Alphabet", "Search & Data.", "Core"),
             "META": ("Meta", "Social & Ads.", "Core"),
-            "TSLA": ("Tesla", "EV & Robotics.", "Growth"), # Growth logic fits better
+            "TSLA": ("Tesla", "EV & Robotics.", "Growth"),
             
             # --- CORE: Buffett / Dividend Aristocrats ---
             "BRK.B": ("Berkshire", "Conglomerate.", "Core"),
@@ -735,59 +736,111 @@ def breakout_ready_dt(ind: pd.DataFrame, pat: dict, rules: dict):
     ok_vol = (vol20 > 0) and (vol >= rules["vol_mult"] * vol20)
     return bool(ok_price and ok_vol), {"ceiling": round(ceiling, 4), "atr": round(atr, 4), "stop": round(close - atr, 4)}
 
-# ---------------- Commentary (Updated for Venture/Spec) ----------------
-
-def is_euphoria(r):
-    return (r["Dist_to_52W_High_%"] > -3.5) and (r["Dist_to_SMA200_%"] > 50.0) and (r["RSI14"] >= 70.0)
+# ---------------- Commentary Engine 2.1 (Actionable + Deep Logic) ----------------
 
 def comment_for_row(r: pd.Series) -> str:
-    d200 = r["Dist_to_SMA200_%"]
-    d52  = r["Dist_to_52W_High_%"]
+    d200 = r.get("Dist_to_SMA200_%", 0.0)
+    d52  = r.get("Dist_to_52W_High_%", 0.0)
     dist_high = abs(d52)
-    rsi  = r["RSI14"]
+    rsi  = r.get("RSI14", 50.0)
     sig  = str(r.get("Signal", "")).upper()
-    f_score = r.get("Fundy_Score", 0)
-    cat_mode = r.get("Fundy", {}).get("category_mode", "Core")
-    eup  = is_euphoria(r)
-
-    is_elite = (f_score >= 7)
-    is_weak  = (f_score < 4)
+    score = r.get("Fundy_Score", 0)
+    
+    fundy = r.get("Fundy", {})
+    cat   = fundy.get("category_mode", "Core")
+    runway = fundy.get("runway_months", 999.0)
+    
+    is_elite = (score >= 7)
+    is_trash = (score < 4)
+    is_weak  = is_trash # Alias fix
+    is_zombie = (cat == "Spec" and runway < 6.0 and runway > 0)
+    is_euphoria = (d52 > -3.5) and (d200 > 40.0) and (rsi >= 70.0)
+    is_oversold = (rsi <= 35.0)
 
     mode_label = ""
-    if cat_mode == "Core": mode_label = "Fortress"
-    elif cat_mode == "Growth": mode_label = "Venture"
-    elif cat_mode == "Spec": mode_label = "Survival"
+    if cat == "Core": mode_label = "Fortress"
+    elif cat == "Growth": mode_label = "Venture"
+    elif cat == "Spec": mode_label = "Survival"
 
     base = ""
 
     if sig == "BUY":
-        if is_elite: base = f"<b>🚀 ROCKET FUEL:</b> Strong Uptrend + {mode_label} Elite ({f_score}/10). Conviction buy."
-        elif is_weak: 
-            if cat_mode == "Spec": base = f"<b>🎲 LOTTO TICKET:</b> Chart looks fun, but fundamentals look dead ({f_score}/10). High risk."
-            else: base = f"<b>🗑️ TRASH RALLY:</b> Flying, but quality is low ({f_score}/10). Trade chart only."
-        else: base = f"<b>✅ STANDARD BUY:</b> Healthy trend. Fundys solid ({f_score}/10)."
-    elif sig == "DCA":
-        if is_weak: base = f"<b>🩸 TOXIC KNIFE:</b> Falling and weak ({f_score}/10). Do not catch."
-        elif is_elite: base = f"<b>💎 {mode_label.upper()} DISCOUNT:</b> Rare pullback on top-tier quality. Accumulate."
-        else: base = f"<b>📉 SWING ZONE:</b> Near 200DMA. Decent bounce play."
-    elif sig == "WATCH":
-        if eup:
-            if is_weak: base = f"<b>🚨 EXIT SCAM WARNING:</b> Garbage ({f_score}/10) in euphoria. Take profit."
-            else: base = f"<b>🍾 EUPHORIA:</b> Great company, bad price. Don't chase."
+        if is_zombie:
+            base = (f"<b>💀 DILUTION TRAP:</b> Chart is up, but cash is critically low (<{runway:.1f}m). "
+                    f"They will likely use this rally to raise capital. Take quick profits or avoid.")
         elif is_elite:
-            base = f"<b>🎯 SNIPER LIST:</b> Elite {mode_label} ({f_score}/10) drifting. Stalk for setup."
+            base = (f"<b>🚀 ROCKET FUEL:</b> Strong uptrend in {mode_label} name ({score}/10). "
+                    f"High conviction setup. Build position on pullbacks to EMA21.")
+        elif is_weak:
+            if cat == "Spec":
+                base = (f"<b>🎲 LOTTO TICKET:</b> Momentum is hot but fundamentals are thin ({score}/10). "
+                        f"Trade the chart only – use tight trailing stops. Casino money.")
+            else:
+                base = (f"<b>🗑️ TRASH RALLY:</b> Price moving up, but business quality is low ({score}/10). "
+                        f"Rent the trade, don't own the company. Exit on first sign of weakness.")
         else:
-            if dist_high < 5.0: base = f"<b>🚪 KNOCKING:</b> Coiling near highs. Watch breakout."
-            elif dist_high > 20.0: base = f"<b>🤕 REPAIRING:</b> Down {dist_high:.1f}%. Needs time."
-            else: base = f"<b>💤 CHOP:</b> Dead money for now."
-    elif sig == "AVOID":
-        if is_elite: base = f"<b>🥶 VALUE TRAP:</b> Elite stats but broken chart. Wait."
-        else: base = f"<b>💀 RADIOACTIVE:</b> Broken chart + Weak {mode_label}. Delete."
-    else: base = "Neutral."
+            base = (f"<b>✅ STANDARD BUY:</b> Healthy trend > 200DMA. Fundamentals decent ({score}/10). "
+                    f"Starter size now, look to add if it holds support.")
 
-    if cat_mode == "Growth" and f_score > 6: base += " <i>(Efficient Growth)</i>"
-    if cat_mode == "Spec" and f_score > 6: base += " <i>(Well Funded)</i>"
-    
+    elif sig == "DCA":
+        if is_zombie:
+            base = (f"<b>🩸 CATCHING KNIVES:</b> Don't do it. Stock is falling and they have <{runway:.1f}m cash. "
+                    f"Bankruptcy or massive dilution risk. Stay away.")
+        elif is_trash:
+            base = (f"<b>💣 VALUE TRAP:</b> It looks cheap, but quality is poor ({score}/10). "
+                    f"Do not average down. Wait for a confirmed reversal or cut loss.")
+        elif is_elite:
+            if is_oversold:
+                base = (f"<b>💎 GOLDEN BUCKET:</b> Elite {mode_label} ({score}/10) is deeply oversold (RSI {rsi:.0f}). "
+                        f"High probability zone for patient accumulation. Scale in.")
+            else:
+                base = (f"<b>🛒 QUALITY ON SALE:</b> Rare dip in a {score}/10 business. "
+                        f"Price near 200DMA (Δ{d200:.1f}%). Good spot to start a long-term position.")
+        else:
+            base = (f"<b>📉 SWING ZONE:</b> Testing 200DMA support. "
+                    f"Play the bounce with a stop below the line. Fundamental conviction is average.")
+
+    elif sig == "WATCH":
+        if is_euphoria:
+            if is_weak:
+                base = (f"<b>🚨 EXIT SCAM WARNING:</b> Weak stock ({score}/10) gone vertical. "
+                        f"RSI {rsi:.0f} is dangerous. Lock in profits immediately or tighten stops.")
+            else:
+                base = (f"<b>🍾 EUPHORIA:</b> Great company, terrible entry. RSI {rsi:.0f} is stretched. "
+                        f"Do not chase. Set alert for a pullback to EMA21.")
+        elif is_elite:
+            base = (f"<b>🎯 SNIPER LIST:</b> Elite {mode_label} ({score}/10) consolidating. "
+                    f"Stalking mode: Wait for a breakout of highs or a dip to the 50DMA.")
+        else:
+            if dist_high < 5.0:
+                base = (f"<b>🚪 KNOCKING:</b> Coiling tight, just {dist_high:.1f}% below highs. "
+                        f"Set buy-stop alert above resistance for a breakout trade.")
+            elif dist_high > 25.0:
+                base = (f"<b>🤕 REPAIRING:</b> Down {dist_high:.1f}% from highs. Trend is broken. "
+                        f"Dead money until it reclaims the 200DMA. Ignore.")
+            elif rsi > 60:
+                base = (f"<b>🔥 HEATING UP:</b> Momentum building (RSI {rsi:.0f}), but no clear entry. "
+                        f"Watch for a 'Bull Flag' pattern to form.")
+            else:
+                base = (f"<b>💤 CHOP CITY:</b> Sideways action. No edge here currently. "
+                        f"Focus capital elsewhere.")
+
+    elif sig == "AVOID":
+        if is_elite:
+            base = (f"<b>🥶 VALUE TRAP:</b> Great {mode_label} business ({score}/10) but chart is broken. "
+                    f"Don't fight the trend. Wait for a Stage 1 base to form.")
+        else:
+            base = (f"<b>💀 RADIOACTIVE:</b> Broken chart + weak fundamentals ({score}/10). "
+                    f"High opportunity cost. Remove from watchlist.")
+
+    else:
+        base = "Neutral – no clear edge."
+
+    if cat == "Growth" and score > 6:
+        base += " <br><i>💡 Note: Efficient Growth Machine (Rule of 40).</i>"
+    if cat == "Spec" and score > 6 and runway >= 18:
+        base += " <br><i>💡 Note: Well Funded (Runway > 18m).</i>"
+
     return base
 
 # ---------------- Rendering & Parsing ----------------
@@ -812,7 +865,7 @@ def mini_candle(ind, flag_info=None, pattern_lines=None):
 def mini_spark(ind):
     v = ind.tail(SPARK_DAYS)
     fig = go.Figure(go.Scatter(x=v["Date"], y=v["Close"], mode="lines", line=dict(width=1, color="#94a3b8")))
-    fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=50, width=120, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor="rgba(0,0,0,0)", showlegend=False)
+    fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=50, width=120, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
     return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={"displayModeBar": False, "staticPlot": True})
 
 def parse_announcements(market_code):
@@ -1171,7 +1224,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v6.3...")
+    print("Starting TraderBruh Global Hybrid v6.4...")
     market_htmls, tab_buttons = [], []
     for m, conf in MARKETS.items():
         df, news = process_market(m, conf)
@@ -1179,7 +1232,7 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body><div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.4</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body><div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(OUTPUT_HTML, "w", encoding="utf-8") as f: f.write(full)
     print("Done:", OUTPUT_HTML)
