@@ -1,6 +1,10 @@
+--- START OF FILE traderbruh_web_dashboard_gh.py ---
+
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 5.3 (Fixed Rendering + Deleted Dead Tickers)
+# Version: Ultimate 6.3 (Massive Ticker Expansion + V6.2 Logic)
+# - Expanded Universe: Core/Growth/Spec across ASX & USA
+# - Academic/VC Logic: Rule of 40, Mohanram, Survival Runway
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -52,69 +56,92 @@ MARKETS = {
         "currency": "A$",
         "suffix": ".AX",
         "tickers": {
-            # -- ETFs & Indices --
+            # --- ETFs & Indices ---
             "A200": ("Betashares A200", "ASX 200 ETF.", "Core"),
+            "VAS":  ("Vanguard AUS", "Australian Shares Index.", "Core"),
             
-            # -- Tech & WAAAX --
-            "XRO": ("Xero", "Cloud accounting globally.", "Growth"),
-            "WTC": ("WiseTech", "Logistics software (CargoWise).", "Growth"),
-            "TNE": ("TechnologyOne", "Gov/Edu Enterprise SaaS.", "Core"),
-            "NXT": ("NEXTDC", "Data Centers (AI Infrastructure).", "Growth"),
-            "PME": ("Pro Medicus", "Radiology AI software.", "Growth"),
-            "MP1": ("Megaport", "Network-as-a-Service.", "Spec"),
-            "CDA": ("Codan", "Comms & Metal Detection.", "Core"),
-            "HUB": ("HUB24", "Investment Platform.", "Growth"),
-            "NWL": ("Netwealth", "Wealth Platform.", "Growth"),
-            
-            # -- Engineering & Infra --
-            "CVL": ("Civmec", "Defense Shipbuilding/Eng.", "Growth"),
-            "GNP": ("GenusPlus", "Power/Grid Infrastructure.", "Growth"),
-            
-            # -- Defense & Aero --
-            "DRO": ("DroneShield", "Counter-UAS/Drone defense.", "Growth"),
-            "EOS": ("Electro Optic", "Space & Defense systems.", "Spec"),
-            "ASB": ("Austal", "Shipbuilding (US Navy).", "Core"),
-            
-            # -- Strategic Minerals --
-            "PLS": ("Pilbara Minerals", "Hard-rock Lithium.", "Growth"),
-            "MIN": ("Mineral Resources", "Mining services + Lithium.", "Growth"),
-            "IGO": ("IGO Ltd", "Nickel & Lithium clean energy.", "Growth"),
-            "LTR": ("Liontown", "Lithium developer.", "Spec"),
-            "LYC": ("Lynas", "Rare Earths (Non-China supply).", "Core"),
-            "BOE": ("Boss Energy", "Uranium producer.", "Growth"),
-            "PDN": ("Paladin", "Uranium (Namibia).", "Growth"),
-            "DYL": ("Deep Yellow", "Uranium exploration.", "Spec"),
-            "SYR": ("Syrah", "Graphite Anodes.", "Spec"),
-            
-            # -- Healthcare & Bio --
-            "CSL": ("CSL Limited", "Blood plasma & Vaccines.", "Core"),
-            "COH": ("Cochlear", "Hearing implants.", "Core"),
-            "RMD": ("ResMed", "Sleep apnea/Digital health.", "Core"),
-            "TLX": ("Telix", "Radiopharmaceuticals.", "Growth"),
-            "PNV": ("PolyNovo", "Synthetic skin/Wound care.", "Growth"),
-            "NAN": ("Nanosonics", "Infection prevention.", "Growth"),
-            "NEU": ("Neuren", "Neurodevelopmental drugs.", "Spec"),
-            "RAC": ("Race Oncology", "Anti cancer drugs.", "Growth"),
-            
-            # -- Blue Chip / Cyclical --
-            "BHP": ("BHP Group", "Big Australian Miner.", "Core"),
-            "FMG": ("Fortescue", "Iron Ore & Green Hydrogen.", "Core"),
-            "WDS": ("Woodside", "Oil & Gas energy security.", "Core"),
-            "STO": ("Santos", "LNG & Gas.", "Core"),
-            "MQG": ("Macquarie", "Global Asset Mgmt.", "Core"),
+            # --- CORE: Banking & Financials ---
             "CBA": ("CommBank", "Largest AU Bank.", "Core"),
-            "WES": ("Wesfarmers", "Retail conglomerate (Bunnings/Kmart).", "Core"),
-            "WOW": ("Woolworths", "Grocery dominance.", "Core"),
-            "GMG": ("Goodman Group", "Industrial Real Estate (Warehouses).", "Core"),
-            "REA": ("REA Group", "Real Estate advertising.", "Core"),
-            "CAR": ("Carsales", "Auto marketplace.", "Core"),
-            "JHX": ("James Hardie", "US Housing materials.", "Core"),
-            "ALL": ("Aristocrat", "Gaming & Slots.", "Core"),
-            "QAN": ("Qantas", "Airline & Loyalty.", "Core"),
+            "NAB": ("National Australia Bank", "Big-4 Business Bank.", "Core"),
+            "WBC": ("Westpac", "Big-4 Bank.", "Core"),
+            "ANZ": ("ANZ Group", "Big-4 Bank.", "Core"),
+            "MQG": ("Macquarie", "Global Asset Mgmt.", "Core"),
+            "IAG": ("Insurance Australia", "General Insurer.", "Core"),
+            "QBE": ("QBE Insurance", "Global Insurer.", "Core"),
+            "SUN": ("Suncorp", "Bank & Insurance.", "Core"),
             
-            # -- Spec/Degen --
-            "ZIP": ("Zip Co", "BNPL/Fintech.", "Spec"),
+            # --- CORE: Resources & Energy ---
+            "BHP": ("BHP Group", "Big Australian Miner.", "Core"),
+            "RIO": ("Rio Tinto", "Iron Ore & Diversified.", "Core"),
+            "FMG": ("Fortescue", "Iron Ore & Green Hydrogen.", "Core"),
+            "WDS": ("Woodside", "Oil & Gas Major.", "Core"),
+            "STO": ("Santos", "LNG & Gas.", "Core"),
+            "S32": ("South32", "Diversified Base Metals.", "Core"),
+            "NST": ("Northern Star", "Gold Major.", "Core"),
+            "PLS": ("Pilbara Minerals", "Lithium Major.", "Core"), # Upgraded to Core due to size/cash
+
+            # --- CORE: Industrials, Telco, Staples ---
+            "TLS": ("Telstra", "Telecom Infrastructure.", "Core"),
+            "WES": ("Wesfarmers", "Retail Conglomerate.", "Core"),
+            "WOW": ("Woolworths", "Grocery Dominance.", "Core"),
+            "COL": ("Coles Group", "Supermarkets.", "Core"),
+            "TCL": ("Transurban", "Toll Roads.", "Core"),
+            "APA": ("APA Group", "Gas Infrastructure.", "Core"),
+            "ALL": ("Aristocrat", "Gaming Machines.", "Core"),
+            "BXB": ("Brambles", "Logistics Pallets.", "Core"),
+            "CSL": ("CSL Limited", "Biotech Giant.", "Core"),
+            "COH": ("Cochlear", "Hearing Implants.", "Core"),
+            "RMD": ("ResMed", "Sleep Apnea.", "Core"),
+
+            # --- GROWTH: Tech / Software / Platform ---
+            "XRO": ("Xero", "Cloud Accounting.", "Growth"),
+            "WTC": ("WiseTech", "Logistics Software.", "Growth"),
+            "TNE": ("TechnologyOne", "Enterprise SaaS.", "Core"), # Stable enough for Core
+            "NXT": ("NEXTDC", "Data Centers.", "Growth"),
+            "PME": ("Pro Medicus", "Health Imaging AI.", "Growth"),
+            "ALU": ("Altium", "PCB Design Software.", "Growth"),
+            "AD8": ("Audinate", "Audio Networking.", "Growth"),
+            "HUB": ("HUB24", "Wealth Platform.", "Growth"),
+            "NWL": ("Netwealth", "Wealth Platform.", "Growth"),
+            "CAR": ("Carsales", "Auto Marketplace.", "Core"),
+            "REA": ("REA Group", "Property Listings.", "Core"),
+            "SEK": ("Seek", "Jobs Marketplace.", "Growth"),
+            "360": ("Life360", "Family Safety App.", "Growth"),
+
+            # --- GROWTH: Emerging Leaders ---
+            "DRO": ("DroneShield", "Counter-Drone Defense.", "Growth"),
+            "WEB": ("Webjet", "Online Travel.", "Growth"),
+            "FLT": ("Flight Centre", "Travel Agency.", "Growth"),
+            "LOV": ("Lovisa", "Fast Fashion Jewelry.", "Growth"),
+            "TPW": ("Temple & Webster", "Online Furniture.", "Growth"),
+            "GNP": ("GenusPlus", "Power Infrastructure.", "Growth"),
+            "CVL": ("Civmec", "Engineering/Defense.", "Growth"),
+            "TLX": ("Telix Pharm", "Radiopharmaceuticals.", "Growth"),
+            "PNV": ("PolyNovo", "Wound Care.", "Growth"),
+            "NAN": ("Nanosonics", "Infection Control.", "Growth"),
+
+            # --- SPEC: Strategic Minerals / Explorers ---
+            "LTR": ("Liontown", "Lithium Developer.", "Spec"),
+            "VUL": ("Vulcan Energy", "Zero Carbon Lithium.", "Spec"),
+            "SYR": ("Syrah", "Graphite.", "Spec"),
+            "CXO": ("Core Lithium", "Lithium Producer (Volatile).", "Spec"),
+            "LKE": ("Lake Resources", "Lithium Brine.", "Spec"),
+            "CHN": ("Chalice Mining", "Nickel/PGE Discovery.", "Spec"),
+            "DEG": ("De Grey", "Gold Exploration.", "Spec"),
+            "GL1": ("Global Lithium", "Lithium Exploration.", "Spec"),
+            "BOE": ("Boss Energy", "Uranium.", "Growth"),
+            "PDN": ("Paladin Energy", "Uranium.", "Growth"),
+            "DYL": ("Deep Yellow", "Uranium.", "Spec"),
+
+            # --- SPEC: Small Caps / Degens ---
+            "ZIP": ("Zip Co", "BNPL.", "Spec"),
             "BRN": ("BrainChip", "Neuromorphic AI.", "Spec"),
+            "MSB": ("Mesoblast", "Stem Cells.", "Spec"),
+            "IMM": ("Immuron", "Biotech.", "Spec"),
+            "BUB": ("Bubs Aust", "Infant Formula.", "Spec"),
+            "88E": ("88 Energy", "Oil Explorer.", "Spec"),
+            "MP1": ("Megaport", "Network as a Service.", "Spec"),
+            "EOS": ("Electro Optic", "Defense Systems.", "Spec"),
         },
     },
     "USA": {
@@ -123,67 +150,91 @@ MARKETS = {
         "currency": "U$",
         "suffix": "",
         "tickers": {
-            # -- The Magnificent 7 --
-            "NVDA": ("NVIDIA", "AI Hardware Leader.", "Core"),
-            "MSFT": ("Microsoft", "Cloud & AI (OpenAI).", "Core"),
-            "AAPL": ("Apple", "Consumer ecosystem.", "Core"),
-            "AMZN": ("Amazon", "AWS & Ecommerce.", "Core"),
-            "GOOG": ("Alphabet", "Search & DeepMind.", "Core"),
+            # --- CORE: Mag 7 & Mega Tech ---
+            "NVDA": ("NVIDIA", "AI Hardware King.", "Core"),
+            "MSFT": ("Microsoft", "Cloud & AI.", "Core"),
+            "AAPL": ("Apple", "Consumer Tech.", "Core"),
+            "AMZN": ("Amazon", "E-comm & Cloud.", "Core"),
+            "GOOG": ("Alphabet", "Search & Data.", "Core"),
             "META": ("Meta", "Social & Ads.", "Core"),
-            "TSLA": ("Tesla", "EVs, Robotics, FSD.", "Growth"),
+            "TSLA": ("Tesla", "EV & Robotics.", "Growth"), # Growth logic fits better
             
-            # -- Semiconductors & Hardware --
-            "AMD":  ("AMD", "Chips (CPU/GPU).", "Growth"),
-            "AVGO": ("Broadcom", "AI Networking & Custom chips.", "Core"),
-            "TSM":  ("TSMC", "The world's foundry.", "Core"),
-            "ARM":  ("ARM", "Chip architecture IP.", "Growth"),
-            "MU":   ("Micron", "Memory for AI.", "Growth"),
-            "SMCI": ("Super Micro", "AI Servers (High Volatility).", "Spec"),
+            # --- CORE: Buffett / Dividend Aristocrats ---
+            "BRK.B": ("Berkshire", "Conglomerate.", "Core"),
+            "JNJ":   ("J&J", "Healthcare.", "Core"),
+            "PG":    ("P&G", "Staples.", "Core"),
+            "KO":    ("Coca-Cola", "Beverages.", "Core"),
+            "PEP":   ("PepsiCo", "Snacks/Bev.", "Core"),
+            "MCD":   ("McDonalds", "Fast Food.", "Core"),
+            "WMT":   ("Walmart", "Retail.", "Core"),
+            "HD":    ("Home Depot", "Home Imp.", "Core"),
+            "JPM":   ("JPMorgan", "Banking.", "Core"),
+            "V":     ("Visa", "Payments.", "Core"),
+            "MA":    ("Mastercard", "Payments.", "Core"),
             
-            # -- Cybersecurity --
-            "PANW": ("Palo Alto", "Cybersec platform.", "Core"),
-            "CRWD": ("CrowdStrike", "Endpoint security.", "Core"),
-            "NET":  ("Cloudflare", "Internet infrastructure.", "Growth"),
+            # --- CORE: Healthcare & Pharma ---
+            "LLY":  ("Eli Lilly", "Weight Loss/Pharma.", "Core"),
+            "NVO":  ("Novo Nordisk", "Weight Loss/Pharma.", "Core"),
+            "UNH":  ("UnitedHealth", "Insurance.", "Core"),
+            "MRK":  ("Merck", "Oncology.", "Core"),
+            "PFE":  ("Pfizer", "Pharma.", "Core"),
+            "ABBV": ("AbbVie", "Pharma.", "Core"),
+            "VRTX": ("Vertex", "Biotech.", "Core"),
+
+            # --- CORE: Old Tech / Semis ---
+            "AVGO": ("Broadcom", "Networking/AI.", "Core"),
+            "ORCL": ("Oracle", "Cloud/DB.", "Core"),
+            "CSCO": ("Cisco", "Networking.", "Core"),
+            "ADBE": ("Adobe", "Creative Software.", "Core"),
+            "TXN":  ("Texas Inst", "Analog Chips.", "Core"),
+            "AMD":  ("AMD", "CPU/GPU.", "Growth"),
+            "INTC": ("Intel", "Chips Turnaround.", "Core"),
+            "TSM":  ("TSMC", "Foundry.", "Core"),
+
+            # --- GROWTH: Cloud / SaaS / Data ---
+            "PLTR": ("Palantir", "AI Data Ops.", "Growth"),
+            "SNOW": ("Snowflake", "Data Cloud.", "Growth"),
+            "DDOG": ("Datadog", "Observability.", "Growth"),
+            "MDB":  ("MongoDB", "NoSQL DB.", "Growth"),
+            "CRM":  ("Salesforce", "CRM.", "Growth"),
+            "NOW":  ("ServiceNow", "Workflow.", "Core"),
+            "PANW": ("Palo Alto", "Cybersec.", "Core"),
+            "CRWD": ("CrowdStrike", "Cybersec.", "Growth"),
+            "ZS":   ("Zscaler", "Security Cloud.", "Growth"),
+            "NET":  ("Cloudflare", "Internet Infra.", "Growth"),
+            "SHOP": ("Shopify", "E-commerce.", "Growth"),
+            "SQ":   ("Block", "Fintech.", "Growth"),
+            "HUBS": ("HubSpot", "Marketing SaaS.", "Growth"),
+            "TEAM": ("Atlassian", "Collaboration.", "Growth"),
             
-            # -- Software / SaaS / Data --
-            "PLTR": ("Palantir", "Gov Intel & Data AI.", "Growth"),
-            "NOW":  ("ServiceNow", "Enterprise workflow.", "Core"),
-            "CRM":  ("Salesforce", "CRM Giant.", "Core"),
-            "SNOW": ("Snowflake", "Cloud Data.", "Growth"),
-            "UBER": ("Uber", "Mobility & Delivery.", "Growth"),
-            
-            # -- Fintech & Crypto --
+            # --- GROWTH: Consumer & Disruption ---
+            "ABNB": ("Airbnb", "Travel.", "Growth"),
+            "UBER": ("Uber", "Mobility.", "Growth"),
+            "DASH": ("DoorDash", "Delivery.", "Growth"),
+            "BKNG": ("Booking", "Travel.", "Core"),
+            "NFLX": ("Netflix", "Streaming.", "Growth"),
+            "SPOT": ("Spotify", "Audio.", "Growth"),
             "COIN": ("Coinbase", "Crypto Exchange.", "Growth"),
+            "HOOD": ("Robinhood", "Trading.", "Spec"),
+            "DKNG": ("DraftKings", "Betting.", "Spec"),
+
+            # --- SPEC: EV / Clean Tech / Hype ---
+            "RIVN": ("Rivian", "EV Trucks.", "Spec"),
+            "LCID": ("Lucid", "Luxury EV.", "Spec"),
+            "PLUG": ("Plug Power", "Hydrogen.", "Spec"),
+            "QS":   ("QuantumScape", "Solid State Battery.", "Spec"),
+            "ENVX": ("Enovix", "Battery Tech.", "Spec"),
+            "SOUN": ("SoundHound", "Voice AI.", "Spec"),
+            "AI":   ("C3.ai", "Enterprise AI.", "Spec"),
+            "IONQ": ("IonQ", "Quantum Computing.", "Spec"),
+
+            # --- SPEC: Meme & Crypto ---
+            "GME":  ("GameStop", "Retailer/Meme.", "Spec"),
+            "AMC":  ("AMC", "Cinema/Meme.", "Spec"),
             "MSTR": ("MicroStrategy", "Bitcoin Proxy.", "Spec"),
-            "SQ":   ("Block", "Payments & CashApp.", "Growth"),
-            "PYPL": ("PayPal", "Digital Payments.", "Core"),
-            "HOOD": ("Robinhood", "Retail trading.", "Spec"),
-            "AFRM": ("Affirm", "BNPL Lending.", "Spec"),
-            
-            # -- Healthcare / Weight Loss --
-            "LLY":  ("Eli Lilly", "GLP-1 Weight loss leader.", "Core"),
-            "NVO":  ("Novo Nordisk", "Ozempic/Wegovy.", "Core"),
-            "VRTX": ("Vertex", "Cystic Fibrosis/Gene editing.", "Core"),
-            "BMRN": ("BioMarin", "Biotech: Genetic therapies.", "Growth"),
-            
-            # -- Defense & Industrial --
-            "LMT":  ("Lockheed", "Defense contractor.", "Core"),
-            "RTX":  ("Raytheon", "Missiles & Aero.", "Core"),
-            "GE":   ("GE Aerospace", "Jet Engines.", "Core"),
-            
-            # -- Consumer / Growth / Degen --
-            "COST": ("Costco", "The ultimate retailer.", "Core"),
-            "CELH": ("Celsius", "Energy Drinks (Growth).", "Growth"),
-            "ONON": ("On Holding", "Running shoes growth.", "Growth"),
-            "DKNG": ("DraftKings", "Sports Betting.", "Spec"),
-            "RKT":  ("Rocket", "Mortgage Tech.", "Growth"),
-            "SOFI": ("SoFi", "Neobank/Student Loans.", "Growth"),
-            "FUBO": ("FuboTV", "Sports Streaming.", "Spec"),
-            "PGY":  ("Pagaya", "AI Lending.", "Spec"),
-            "GME":  ("GameStop", 'Video Game Retailer', "Spec"),
-            
-            # -- True Degens --
-            "BMNR": ("BitMine", "Crypto Mining Hardware.", "Growth"),
+            "MARA": ("Marathon", "Bitcoin Mining.", "Spec"),
+            "RIOT": ("Riot", "Bitcoin Mining.", "Spec"),
+            "CLSK": ("CleanSpark", "Bitcoin Mining.", "Spec"),
         },
     },
     "IND": {
@@ -244,23 +295,19 @@ MARKETS = {
 
 def fetch_prices(symbol: str, tz_name: str) -> pd.DataFrame:
     try:
-        # 1. Configured Fetch
         df = yf.download(symbol, period=f"{FETCH_DAYS}d", interval="1d", auto_adjust=False, progress=False, group_by="column", prepost=False)
         
-        # 2. Fallback to Max if empty
         if df is None or df.empty:
             df = yf.download(symbol, period="max", interval="1d", auto_adjust=False, progress=False, group_by="column", prepost=False)
 
         if df is None or df.empty: return pd.DataFrame()
 
-        # 3. Flatten MultiIndex
         if isinstance(df.columns, pd.MultiIndex):
             if symbol in df.columns.get_level_values(-1):
                 df = df.xs(symbol, axis=1, level=-1, drop_level=True)
             else:
                 df.columns = df.columns.get_level_values(0)
 
-        # 4. Normalize columns
         col_map = {}
         for col in df.columns:
             c = str(col).lower()
@@ -278,7 +325,6 @@ def fetch_prices(symbol: str, tz_name: str) -> pd.DataFrame:
         date_col = "Date" if "Date" in df.columns else df.columns[0]
         df["Date"] = pd.to_datetime(df[date_col], utc=True, errors="coerce")
 
-        # 5. Intraday Stitch
         market_tz = zoneinfo.ZoneInfo(tz_name)
         now_mkt = datetime.now(market_tz)
         last_date_mkt = df["Date"].dt.tz_convert(market_tz).dt.date.max()
@@ -307,85 +353,196 @@ def fetch_prices(symbol: str, tz_name: str) -> pd.DataFrame:
         print(f"[ERROR] fetch_prices failed for {symbol}: {e}")
         return pd.DataFrame()
 
-def fetch_deep_fundamentals(symbol: str):
+# ---------------- NEW: Dynamic Fundamental Engine (Refined V6.2) ----------------
+
+def fetch_dynamic_fundamentals(symbol: str, category: str):
+    """
+    Evaluates companies based on:
+    1. Core : Buffett/Piotroski-style quality (ROE, margins, balance sheet, cash conversion)
+    2. Growth: Rule of 40 + Mohanram-style intangibles + survival buffer (runway)
+    3. Spec : Runway, lifestyle vs work, cash floor (survival)
+    """
     try:
         tick = yf.Ticker(symbol)
-        info = tick.info
-        try: bs, is_, cf = tick.balance_sheet, tick.income_stmt, tick.cashflow
-        except: bs, is_, cf = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        # --- Safely get info dict ---
+        try: info = tick.info
+        except Exception: info = {}
+        if not isinstance(info, dict): info = {}
 
-        def get_item(df, item_names, idx=0):
-            if df.empty: return 0
+        # --- Safely get statements ---
+        try: bs, is_, cf = tick.balance_sheet, tick.income_stmt, tick.cashflow
+        except Exception: bs, is_, cf = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+        def get_item(df, item_names, idx: int = 0, default: float = 0.0) -> float:
+            if df is None or df.empty: return default
             for name in item_names:
                 if name in df.index:
-                    try: return float(df.loc[name].iloc[idx])
-                    except: return 0
-            return 0
+                    try:
+                        row = df.loc[name]
+                        if hasattr(row, "iloc"): return float(row.iloc[idx])
+                        return float(row)
+                    except Exception: return default
+            return default
 
-        def get_cagr(df, item_names, years=3):
-            if df.empty or df.shape[1] < years: return 0
-            curr = get_item(df, item_names, 0)
-            past = get_item(df, item_names, years - 1)
-            if past <= 0 or curr <= 0: return 0
-            return (curr / past) ** (1 / (years - 1)) - 1
+        # --- Parse profit margin & debt/equity once ---
+        raw_profit_margin = info.get("profitMargins") or 0.0
+        try: profit_margin = float(raw_profit_margin)
+        except Exception: profit_margin = 0.0
 
-        roe_3y = 0
-        try:
-            if not is_.empty and not bs.empty:
-                roes = []
-                for i in range(min(3, len(is_.columns), len(bs.columns))):
-                    ni = get_item(is_, ["Net Income"], i)
-                    eq = get_item(bs, ["Stockholders Equity", "Total Equity Gross Minority Interest"], i)
-                    if eq > 0: roes.append(ni / eq)
-                if roes: roe_3y = sum(roes) / len(roes)
-        except: pass
+        raw_debt_eq = info.get("debtToEquity") or 0.0
+        try: debt_to_equity_val = float(raw_debt_eq)
+        except Exception: debt_to_equity_val = 0.0
 
-        ocf = get_item(cf, ["Operating Cash Flow", "Total Cash From Operating Activities"])
-        net_inc = get_item(is_, ["Net Income"])
-        high_quality_earnings = ocf > net_inc
-        marg_curr = info.get("profitMargins", 0)
-        
-        score = 0
-        if roe_3y > 0.15: score += 2
-        elif roe_3y > 0.10: score += 1
-        if marg_curr > 0.10: score += 1
-        if high_quality_earnings: score += 0.5
+        score = 0.0
+        tier = "Neutral"
+        key_metric_str = ""
 
-        curr_ratio = info.get("currentRatio", 0) or 0
-        debt_eq = info.get("debtToEquity", 999)
-        if debt_eq and debt_eq > 50: debt_eq = debt_eq / 100.0
+        # --- Common datapoints ---
+        cash    = get_item(bs, ["Cash And Cash Equivalents", "Cash And Cash Equivalents And Short Term Investments", "Cash Financial"])
+        lt_debt = get_item(bs, ["Long Term Debt", "Total Long Term Debt"])
+        assets  = get_item(bs, ["Total Assets"])
+        tot_rev = get_item(is_, ["Total Revenue", "Operating Revenue"])
+        net_inc = get_item(is_, ["Net Income", "Net Income Common Stockholders"])
+        ebitda  = get_item(is_, ["EBITDA", "Normalized EBITDA"])
+        ocf     = get_item(cf, ["Operating Cash Flow", "Total Cash From Operating Activities"])
+        equity  = get_item(bs, ["Stockholders Equity", "Total Equity Gross Minority Interest"])
 
-        cash = get_item(bs, ["Cash And Cash Equivalents", "Cash Financial"])
-        lt_debt = get_item(bs, ["Long Term Debt"])
-        
-        if cash > lt_debt: score += 1.5
-        elif debt_eq < 0.5: score += 1
-        if curr_ratio > 1.5: score += 1
-        elif curr_ratio > 1.1: score += 0.5
+        # --- Burn / runway shared by Growth & Spec ---
+        burn_annual = 0.0
+        runway_months = None
+        if (ocf < 0) or (net_inc < 0):
+            if (ocf < 0) and (net_inc < 0): base_loss = min(ocf, net_inc)
+            elif ocf < 0: base_loss = ocf
+            else: base_loss = net_inc
+            burn_annual = abs(base_loss)
+            if burn_annual > 0 and cash > 0:
+                runway_months = cash / (burn_annual / 12.0)
 
-        shares_curr = get_item(bs, ["Share Issued", "Ordinary Shares Number"], 0)
-        shares_old = get_item(bs, ["Share Issued", "Ordinary Shares Number"], 2)
-        is_buyback = False
-        if shares_old > 0:
-            change = (shares_curr - shares_old) / shares_old
-            if change < -0.01: score += 1.5; is_buyback = True
-            elif change < 0.05: score += 1
-        
-        rev_cagr = get_cagr(is_, ["Total Revenue", "Operating Revenue"], 3)
-        if rev_cagr > 0.10: score += 1
-        
-        peg, pe = info.get("pegRatio", 0) or 0, info.get("trailingPE", 0) or 0
-        if (peg and 0 < peg < 2.0) or (pe and 0 < pe < 20): score += 1
-        
-        score = min(score, 10)
-        tier = "Fortress" if score >= 7 else ("Quality" if score >= 4 else "Spec")
-        
+        # =================== MODE 1: CORE (BUFFETT / VALUE) ===================
+        if category == "Core":
+            # 1) ROE (weight ~3)
+            if equity > 0:
+                roe = net_inc / equity
+                if roe > 0.15: score += 3
+                elif roe > 0.10: score += 1.5
+            else: roe = 0.0
+
+            # 2) Profit margins (weight ~2)
+            marg = profit_margin
+            if marg > 0.15: score += 2
+            elif marg > 0.08: score += 1
+
+            # 3) Balance sheet: debt vs cash (weight ~3)
+            debt_eq = debt_to_equity_val
+            if debt_eq > 50: debt_eq = debt_eq / 100.0
+
+            if cash > lt_debt and lt_debt > 0: score += 3
+            elif debt_eq < 0.5: score += 2
+            elif debt_eq < 1.0: score += 1
+
+            # 4) Earnings quality (weight ~2)
+            if ocf > net_inc > 0: score += 2
+
+            tier = "Fortress" if score >= 7 else ("Stable" if score >= 4 else "Weak")
+            key_metric_str = f"ROE: {roe*100:.1f}%"
+
+        # =================== MODE 2: GROWTH (VC / MOHANRAM) ===================
+        elif category == "Growth":
+            # 1) Rule of 40 (weight ~4)
+            rev_prev = get_item(is_, ["Total Revenue", "Operating Revenue"], idx=1)
+            rev_growth = ((tot_rev - rev_prev) / rev_prev) * 100.0 if rev_prev > 0 else 0.0
+            ebitda_marg = (ebitda / tot_rev) * 100.0 if tot_rev > 0 else 0.0
+            rule_40 = rev_growth + ebitda_marg
+
+            if rule_40 > 50: score += 4
+            elif rule_40 > 40: score += 3
+            elif rule_40 > 20: score += 1
+
+            # 2) Mohanram-style intangibles: R&D intensity (weight ~2)
+            rnd = get_item(is_, ["Research And Development"])
+            sga = get_item(is_, ["Selling General And Administration", "General And Administrative Expense"])
+            rnd_intensity = (rnd / assets) if assets > 0 else 0.0
+            if rnd_intensity > 0.10: score += 2
+            elif rnd_intensity > 0.05: score += 1
+
+            # 3) Earnings quality: CFO > Net Income (weight ~1)
+            if ocf > net_inc and ocf > 0: score += 1
+
+            # 4) "Magic Number" proxy: rev added per $ of SGA (weight ~2)
+            if sga > 0:
+                efficiency = (tot_rev - rev_prev) / sga
+                if efficiency > 1.0: score += 2
+                elif efficiency > 0.7: score += 1
+
+            # 5) Gross margin scalability (weight ~2)
+            gp = get_item(is_, ["Gross Profit"])
+            gm = gp / tot_rev if tot_rev > 0 else 0.0
+            if gm > 0.60: score += 2
+            elif gm > 0.40: score += 1
+
+            # 6) Survival buffer: runway (penalty/bonus)
+            if runway_months is not None:
+                if runway_months < 6: score -= 2
+                elif runway_months < 12: score -= 1
+                elif runway_months > 24: score += 1
+
+            tier = "Hyper-Growth" if score >= 7 else ("Scalable" if score >= 4 else "Burner")
+            key_metric_str = f"Rule40: {rule_40:.0f}"
+
+        # =================== MODE 3: SPEC (SURVIVAL / LIFESTYLE) ===================
+        else:  # Spec
+            # 1) Runway (weight ~4)
+            if runway_months is not None or burn_annual > 0:
+                rm = runway_months if runway_months is not None else 0.0
+                if rm > 18: score += 4
+                elif rm > 12: score += 3
+                elif rm > 6: score += 1
+                else: score -= 2  # imminent death
+
+            # 2) Lifestyle vs work (weight ~3)
+            sga = get_item(is_, ["Selling General And Administration", "General And Administrative Expense"])
+            rnd = get_item(is_, ["Research And Development"])
+            capex = abs(get_item(cf, ["Capital Expenditure", "Purchase Of PPE"]))
+            work_spend = max(rnd, capex)
+
+            if work_spend == 0 and sga == 0: pass
+            elif work_spend > sga * 1.5: score += 3
+            elif work_spend > sga: score += 2
+            elif sga > work_spend * 2: score -= 2  # lifestyle company
+
+            # 3) Cash floor (weight ~3)
+            if cash > 20_000_000: score += 3
+            elif cash > 5_000_000: score += 1
+
+            # Key metric for card/table
+            if runway_months is not None:
+                rm = runway_months
+                runway_str = f"{rm:.1f}m" if rm < 120 else ">10yr"
+            else: runway_str = "n/a"
+
+            tier = "Funded" if score >= 7 else ("Alive" if score >= 4 else "Zombie")
+            key_metric_str = f"Runway: {runway_str}"
+            if tot_rev < 1_000_000:
+                key_metric_str = f"Cash: {cash/1e6:.1f}M / {runway_str}"
+
+        # Clamp and return
+        score = max(0.0, min(10.0, score))
+
         return {
-            "score": round(score, 1), "tier": tier, "roe_3y": roe_3y, "margins": marg_curr,
-            "debt_eq": debt_eq, "rev_cagr": rev_cagr, "is_buyback": is_buyback, "pe": pe, "cash": cash
+            "score": round(score, 1),
+            "tier": tier,
+            "category_mode": category,
+            "key_metric": key_metric_str,
+            "roe": net_inc / equity if equity > 0 else 0.0,
+            "margin": profit_margin,
+            "debteq": debt_to_equity_val,
+            "cash": cash,
+            "runway_months": runway_months or 0.0,
+            "burn_annual": burn_annual,
         }
-    except:
-        return {"score": 0, "tier": "Error", "roe_3y": 0, "margins": 0, "debt_eq": 0, "rev_cagr": 0, "is_buyback": False, "pe": 0, "cash": 0}
+
+    except Exception:
+        return {"score": 0.0, "tier": "Error", "category_mode": category, "key_metric": "-", "roe": 0.0, "margin": 0.0, "debteq": 0.0, "cash": 0.0, "runway_months": 0.0, "burn_annual": 0.0}
 
 def indicators(df: pd.DataFrame) -> pd.DataFrame:
     x = df.copy().sort_values("Date").reset_index(drop=True)
@@ -580,7 +737,7 @@ def breakout_ready_dt(ind: pd.DataFrame, pat: dict, rules: dict):
     ok_vol = (vol20 > 0) and (vol >= rules["vol_mult"] * vol20)
     return bool(ok_price and ok_vol), {"ceiling": round(ceiling, 4), "atr": round(atr, 4), "stop": round(close - atr, 4)}
 
-# ---------------- Commentary ----------------
+# ---------------- Commentary (Updated for Venture/Spec) ----------------
 
 def is_euphoria(r):
     return (r["Dist_to_52W_High_%"] > -3.5) and (r["Dist_to_SMA200_%"] > 50.0) and (r["RSI14"] >= 70.0)
@@ -592,40 +749,47 @@ def comment_for_row(r: pd.Series) -> str:
     rsi  = r["RSI14"]
     sig  = str(r.get("Signal", "")).upper()
     f_score = r.get("Fundy_Score", 0)
-    cat  = str(r.get("Category", "Core"))
+    cat_mode = r.get("Fundy", {}).get("category_mode", "Core")
     eup  = is_euphoria(r)
 
-    is_degen = (cat.lower() == "spec")
-    is_trash = (f_score < 4)
-    is_fortress = (f_score >= 7)
+    is_elite = (f_score >= 7)
+    is_weak  = (f_score < 4)
+
+    mode_label = ""
+    if cat_mode == "Core": mode_label = "Fortress"
+    elif cat_mode == "Growth": mode_label = "Venture"
+    elif cat_mode == "Spec": mode_label = "Survival"
 
     base = ""
 
     if sig == "BUY":
-        if is_fortress: base = f"<b>🚀 ROCKET FUEL (High Conviction):</b> Strong Uptrend + Fortress Shield ({f_score}/10). Scale in."
-        elif is_trash: base = f"<b>🗑️ TRASH RALLY (Momentum):</b> Flying, but engine broken ({f_score}/10). Trade chart, tight stops."
-        else: base = f"<b>✅ STANDARD BUY:</b> Healthy trend > 200DMA. Fundys OK ({f_score}/10). Starter size."
+        if is_elite: base = f"<b>🚀 ROCKET FUEL:</b> Strong Uptrend + {mode_label} Elite ({f_score}/10). Conviction buy."
+        elif is_weak: 
+            if cat_mode == "Spec": base = f"<b>🎲 LOTTO TICKET:</b> Chart looks fun, but fundamentals look dead ({f_score}/10). High risk."
+            else: base = f"<b>🗑️ TRASH RALLY:</b> Flying, but quality is low ({f_score}/10). Trade chart only."
+        else: base = f"<b>✅ STANDARD BUY:</b> Healthy trend. Fundys solid ({f_score}/10)."
     elif sig == "DCA":
-        if is_trash: base = f"<b>🩸 TOXIC KNIFE:</b> Dip looks cheap, but Shield is {f_score}/10. Don't catch it."
-        elif is_fortress: base = f"<b>💎 COMPOUNDER ON SALE:</b> Rare pullback on 7+ Quality. Patient money adds."
-        else: base = f"<b>📉 SWING ZONE:</b> Near 200DMA (Δ{d200:.1f}%) with RSI cooling. Decent bounce play."
+        if is_weak: base = f"<b>🩸 TOXIC KNIFE:</b> Falling and weak ({f_score}/10). Do not catch."
+        elif is_elite: base = f"<b>💎 {mode_label.upper()} DISCOUNT:</b> Rare pullback on top-tier quality. Accumulate."
+        else: base = f"<b>📉 SWING ZONE:</b> Near 200DMA. Decent bounce play."
     elif sig == "WATCH":
         if eup:
-            if is_trash: base = f"<b>🚨 EXIT SCAM WARNING:</b> Garbage ({f_score}/10) in euphoria. Take profit."
-            else: base = f"<b>🍾 EUPHORIA ZONE:</b> Price stretched. Don't chase."
-        elif is_fortress:
-            base = f"<b>🎯 SNIPER LIST:</b> Elite quality ({f_score}/10) drifting. Stalk for setup."
+            if is_weak: base = f"<b>🚨 EXIT SCAM WARNING:</b> Garbage ({f_score}/10) in euphoria. Take profit."
+            else: base = f"<b>🍾 EUPHORIA:</b> Great company, bad price. Don't chase."
+        elif is_elite:
+            base = f"<b>🎯 SNIPER LIST:</b> Elite {mode_label} ({f_score}/10) drifting. Stalk for setup."
         else:
-            if dist_high < 5.0: base = f"<b>🚪 KNOCKING ON DOOR:</b> Coiling {dist_high:.1f}% below highs. Watch breakout."
-            elif dist_high > 20.0: base = f"<b>🤕 RECOVERY WARD:</b> Down {dist_high:.1f}% from highs. Needs repair."
-            elif rsi > 60: base = f"<b>🔥 HEATING UP:</b> Momentum building (RSI {rsi:.0f}), entry not clean yet."
-            else: base = f"<b>💤 CHOP CITY:</b> Stuck ({dist_high:.1f}% off highs). Dead money."
+            if dist_high < 5.0: base = f"<b>🚪 KNOCKING:</b> Coiling near highs. Watch breakout."
+            elif dist_high > 20.0: base = f"<b>🤕 REPAIRING:</b> Down {dist_high:.1f}%. Needs time."
+            else: base = f"<b>💤 CHOP:</b> Dead money for now."
     elif sig == "AVOID":
-        if is_fortress: base = f"<b>🥶 VALUE TRAP:</b> Great business ({f_score}/10) in downtrend. Wait for base."
-        else: base = f"<b>💀 RADIOACTIVE:</b> Broken chart + Weak business. Delete."
+        if is_elite: base = f"<b>🥶 VALUE TRAP:</b> Elite stats but broken chart. Wait."
+        else: base = f"<b>💀 RADIOACTIVE:</b> Broken chart + Weak {mode_label}. Delete."
     else: base = "Neutral."
 
-    if is_degen: base += " <br><i>⚠️ <b>DEGEN WARNING:</b> Spec play. Casino money only.</i>"
+    if cat_mode == "Growth" and f_score > 6: base += " <i>(Efficient Growth)</i>"
+    if cat_mode == "Spec" and f_score > 6: base += " <i>(Well Funded)</i>"
+    
     return base
 
 # ---------------- Rendering & Parsing ----------------
@@ -650,7 +814,7 @@ def mini_candle(ind, flag_info=None, pattern_lines=None):
 def mini_spark(ind):
     v = ind.tail(SPARK_DAYS)
     fig = go.Figure(go.Scatter(x=v["Date"], y=v["Close"], mode="lines", line=dict(width=1, color="#94a3b8")))
-    fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=50, width=120, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
+    fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=50, width=120, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor="rgba(0,0,0,0)", showlegend=False)
     return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={"displayModeBar": False, "staticPlot": True})
 
 def parse_announcements(market_code):
@@ -702,9 +866,8 @@ def process_market(m_code, m_conf):
         df["Ticker"] = t_key
         frames.append(df)
         
-        fundy = fetch_deep_fundamentals(full_sym)
+        fundy = fetch_dynamic_fundamentals(full_sym, t_cat)
         
-        # RELAXED FILTER: No SMA200 required
         ind = indicators(df).dropna(subset=["High20", "RSI14", "EMA21", "Vol20", "ATR14"])
         if ind.empty: continue
         last = ind.iloc[-1]
@@ -728,7 +891,8 @@ def process_market(m_code, m_conf):
         is_aligned = (pbias == "neutral" or sig_str == "watch") or (pbias == "bullish" and sig_str in ["buy", "dca"]) or (pbias == "bearish" and sig_str == "avoid")
         palign = "ALIGNED" if is_aligned else "CONFLICT"
 
-        if t_cat != "Spec" and fundy["score"] < 4: sig = "AVOID"
+        if t_cat == "Core" and fundy["score"] < 4: sig = "AVOID"
+        if t_cat == "Spec" and fundy["score"] < 3: sig = "AVOID"
 
         snaps.append({
             "Ticker": t_key, "Name": t_name, "Desc": t_desc, "Category": t_cat,
@@ -811,6 +975,8 @@ body { background: var(--bg); background-image: radial-gradient(at 0% 0%, rgba(5
 .badge.news { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple); }
 .badge.shield-high { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.2); }
 .badge.shield-low { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.2); }
+.badge.venture-high { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple); border: 1px solid rgba(168, 85, 247, 0.2); }
+.badge.spec-high { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.2); }
 @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
 .pulse { animation: pulse 2s infinite; }
 .euphoria-glow { box-shadow: 0 0 15px rgba(245, 158, 11, 0.15); border-color: rgba(245, 158, 11, 0.3); }
@@ -876,10 +1042,19 @@ def render_card(r, badge_type, curr):
     news_tag = '<span class="badge news" style="margin-left:6px">News</span>' if "News:" in (r['Comment'] or "") else ""
     
     score = r['Fundy_Score']
-    if score >= 7: s_badge, s_icon = "shield-high", "🛡️"
-    elif score < 4: s_badge, s_icon = "shield-low", "⚠️"
-    else: s_badge, s_icon = "watch", "⚖️"
-    if score == 10: s_icon = "💎"
+    cat = r['Category']
+    
+    s_badge, s_icon = "watch", "⚖️"
+    if cat == "Core":
+        s_badge = "shield-high" if score >= 7 else ("shield-low" if score < 4 else "watch")
+        s_icon = "🛡️"
+    elif cat == "Growth":
+        s_badge = "venture-high" if score >= 7 else "watch"
+        s_icon = "🚀"
+    elif cat == "Spec":
+        s_badge = "spec-high" if score >= 7 else "shield-low"
+        s_icon = "❤️"
+
     fundy_html = f'<span class="badge {s_badge}" style="margin-left:6px">{s_icon} {score}/10 {r["Fundy_Tier"]}</span>'
 
     return f"""
@@ -899,7 +1074,7 @@ def render_card(r, badge_type, curr):
         <div class="metrics-row">
             <div class="metric"><label>RSI(14)</label><span class="mono" style="color:{'#ef4444' if r['RSI14']>70 else ('#10b981' if r['RSI14']>45 else '#f59e0b')}">{r['RSI14']:.0f}</span></div>
             <div class="metric"><label>vs 200DMA</label><span class="mono">{r['Dist_to_SMA200_%']:+.1f}%</span></div>
-            <div class="metric"><label>vs 52W High</label><span class="mono">{r['Dist_to_52W_High_%']:+.1f}%</span></div>
+            <div class="metric"><label>Key Metric</label><span class="mono">{r['Fundy']['key_metric']}</span></div>
         </div>
         <div class="comment-box">{r['Comment']}</div>
         <div class="chart-container">{r['_mini_candle']}</div>
@@ -932,7 +1107,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
 
     html_cards = mk_card(BUY,'buy') + mk_card(DCA,'dca') + mk_card(WATCH,'watch') + mk_card(AVOID,'avoid')
 
-    degen_rows = "".join([f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td><span class='badge shield-low'>{r['Fundy_Score']} Spec</span></td><td>{r['Signal']}</td><td class='mono'>{r['Dist_to_SMA200_%']:+.1f}%</td><td>{r['_mini_spark']}</td></tr>" for _, r in DEGEN.iterrows()]) if not DEGEN.empty else "<tr><td colspan='5' style='text-align:center'>No Degens.</td></tr>"
+    degen_rows = "".join([f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td><span class='badge shield-low'>{r['Fundy_Score']} {r['Fundy_Tier']}</span></td><td>{r['Signal']}</td><td class='mono'>{r['Fundy']['key_metric']}</td><td>{r['_mini_spark']}</td></tr>" for _, r in DEGEN.iterrows()]) if not DEGEN.empty else "<tr><td colspan='5' style='text-align:center'>No Degens.</td></tr>"
     
     gate_rows = "".join([f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td class='mono text-red'>{r['AutoDCA_Gap_%']:.1f}%</td><td class='mono'>{'Yes' if r['AutoDCA_ReclaimMid'] else 'No'}</td><td class='mono'>{'Yes' if r['AutoDCA_AboveEMA21'] else 'No'}</td><td class='mono'>{r['AutoDCA_Fill_%']:.1f}%</td><td>{r['_mini_spark']}</td></tr>" for _, r in GATE.iterrows()]) if not GATE.empty else "<tr><td colspan='6' style='text-align:center'>No setups.</td></tr>"
     
@@ -944,7 +1119,11 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     for _, r in snaps_df.sort_values('Fundy_Score', ascending=False).iterrows():
         sc = r['Fundy_Score']
         cl = 'shield-high' if sc>=7 else ('watch' if sc>=4 else 'shield-low')
-        f_rows += f"<tr class='searchable-item'><td>{r['Ticker']}</td><td><span class='badge {cl}'>{sc} {r['Fundy_Tier']}</span></td><td class='mono'>{r['Fundy']['roe_3y']*100:.1f}%</td><td class='mono'>{r['Fundy']['margins']*100:.1f}%</td><td class='mono'>{r['Fundy']['debt_eq']:.2f}</td><td class='mono'>{r['Category']}</td></tr>"
+        icon = "🛡️"
+        if r['Category'] == 'Growth': icon = "🚀"
+        elif r['Category'] == 'Spec': icon = "❤️"
+        
+        f_rows += f"<tr class='searchable-item'><td>{r['Ticker']}</td><td><span class='badge {cl}'>{icon} {sc} {r['Fundy_Tier']}</span></td><td class='mono'>{r['Fundy']['key_metric']}</td><td class='mono'>{r['Fundy']['roe']*100:.1f}%</td><td class='mono'>{r['Fundy']['debteq']:.2f}</td><td class='mono'>{r['Category']}</td></tr>"
 
     kpi_html = f"""<div class="kpi-scroll">
         {render_kpi('Buy', len(BUY), 'text-green')}
@@ -961,7 +1140,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     <a href="#{m_code}-gate" class="nav-link">Auto-DCA</a>
     <a href="#{m_code}-patterns" class="nav-link">Patterns</a>
     <a href="#{m_code}-news" class="nav-link">News</a>
-    <a href="#{m_code}-fundy" class="nav-link">Fundamentals</a>
+    <a href="#{m_code}-fundy" class="nav-link">Deep Fundamentals</a>
     </div></div>"""
 
     return f"""
@@ -974,7 +1153,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
             {html_cards}
             
             <h2 id="{m_code}-degen" style="margin-top:40px">Degenerate Radar (Spec Only)</h2>
-            <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>Sig</th><th>Trend</th><th>Spark</th></tr></thead><tbody>{degen_rows}</tbody></table></div></div>
+            <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>Sig</th><th>Metric</th><th>Spark</th></tr></thead><tbody>{degen_rows}</tbody></table></div></div>
             
             <h2 id="{m_code}-gate" style="margin-top:40px">Auto-DCA Candidates</h2>
             <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Gap %</th><th>Reclaim?</th><th>EMA21?</th><th>Fill %</th><th>Trend</th></tr></thead><tbody>{gate_rows}</tbody></table></div></div>
@@ -986,7 +1165,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
             <div class="card" style="padding:0"><div class="table-responsive"><table><thead><tr><th>Date</th><th>Ticker</th><th>Type</th><th>Headline</th></tr></thead><tbody>{news_rows}</tbody></table></div></div>
             
             <h2 id="{m_code}-fundy" style="margin-top:40px">Deep Fundamentals</h2>
-            <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>ROE</th><th>Margin</th><th>Debt/Eq</th><th>Cat</th></tr></thead><tbody>{f_rows}</tbody></table></div></div>
+            <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>Key Metric</th><th>ROE</th><th>Debt/Eq</th><th>Cat</th></tr></thead><tbody>{f_rows}</tbody></table></div></div>
             
             <div style="height:50px"></div>
         </div>
@@ -994,7 +1173,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v5.3...")
+    print("Starting TraderBruh Global Hybrid v6.3...")
     market_htmls, tab_buttons = [], []
     for m, conf in MARKETS.items():
         df, news = process_market(m, conf)
@@ -1002,7 +1181,9 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v5.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body><div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body><div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(OUTPUT_HTML, "w", encoding="utf-8") as f: f.write(full)
     print("Done:", OUTPUT_HTML)
+
+--- END OF FILE traderbruh_web_dashboard_gh.py ---
