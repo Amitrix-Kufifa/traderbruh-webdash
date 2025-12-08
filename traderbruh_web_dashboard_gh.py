@@ -1234,13 +1234,21 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
 if __name__ == "__main__":
     print("Starting TraderBruh Global Hybrid v6.5...")
     market_htmls, tab_buttons = [], []
+    
+    # Calculate generation time once
+    gen_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     for m, conf in MARKETS.items():
         df, news = process_market(m, conf)
         market_htmls.append(render_market_html(m, conf, df, news))
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.5</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body><div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
+    # Added the "Last Updated" div right after <body>
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.5</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body>
+    <div style="text-align:center; padding:10px 0 5px 0; color:#64748b; font-size:11px; font-family:'JetBrains Mono', monospace;">Last Updated: {gen_time}</div>
+    <div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
+    
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(OUTPUT_HTML, "w", encoding="utf-8") as f: f.write(full)
     print("Done:", OUTPUT_HTML)
