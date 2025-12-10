@@ -736,7 +736,7 @@ def breakout_ready_dt(ind: pd.DataFrame, pat: dict, rules: dict):
     ok_vol = (vol20 > 0) and (vol >= rules["vol_mult"] * vol20)
     return bool(ok_price and ok_vol), {"ceiling": round(ceiling, 4), "atr": round(atr, 4), "stop": round(close - atr, 4)}
 
-# ---------------- Commentary Engine 2.1 (Actionable + Deep Logic) ----------------
+# ---------------- Commentary Engine 2.2 (Setup Aware) ----------------
 
 def is_euphoria(r):
     # Global helper required for both commentary and HTML rendering
@@ -746,6 +746,7 @@ def is_euphoria(r):
     return (d52 > -3.5) and (d200 > 40.0) and (rsi >= 70.0)
 
 def comment_for_row(r: pd.Series) -> str:
+    # 1. Unpack Metrics
     d200 = r.get("Dist_to_SMA200_%", 0.0)
     d52  = r.get("Dist_to_52W_High_%", 0.0)
     dist_high = abs(d52)
@@ -757,11 +758,16 @@ def comment_for_row(r: pd.Series) -> str:
     cat   = fundy.get("category_mode", "Core")
     runway = fundy.get("runway_months", 999.0)
     
+    # 2. Check Special Setups (The Fix: These override generic comments)
+    is_autodca = r.get("AutoDCA_Flag", False)
+    is_breakout = r.get("BreakoutReady", False)
+    breakout_lvl = r.get("Breakout_Level", 0.0)
+
+    # 3. Determine Archetype & Flags
     is_elite = (score >= 7)
     is_trash = (score < 4)
-    is_weak  = is_trash # Alias fix
+    is_weak  = is_trash 
     is_zombie = (cat == "Spec" and runway < 6.0 and runway > 0)
-    # Re-use the logic or helper
     eup = is_euphoria(r)
     is_oversold = (rsi <= 35.0)
 
@@ -772,11 +778,23 @@ def comment_for_row(r: pd.Series) -> str:
 
     base = ""
 
+    # --- PRIORITY 1: ZOMBIE CHECK (Safety First) ---
+    if is_zombie:
+        return (f"<b>💀 DILUTION TRAP:</b> Chart might look okay, but cash is critical "
+                f"(<{runway:.1f}m). High risk of capital raise. Avoid.")
+
+    # --- PRIORITY 2: SPECIAL SETUPS (The Fix) ---
+    if is_autodca:
+        return (f"<b>⚡ AUTO-DCA TRIGGER:</b> Gap-fill setup detected. Price reclaimed "
+                f"the gap midpoint. A technical buy signal despite the broader trend.")
+    
+    if is_breakout:
+        return (f"<b>🧨 BREAKOUT READY:</b> Coiling tight under resistance "
+                f"({breakout_lvl:.2f}). Volume and ATR align. Watch for the pop.")
+
+    # --- PRIORITY 3: STANDARD TREND LOGIC ---
     if sig == "BUY":
-        if is_zombie:
-            base = (f"<b>💀 DILUTION TRAP:</b> Chart is up, but cash is critically low (<{runway:.1f}m). "
-                    f"They will likely use this rally to raise capital. Take quick profits or avoid.")
-        elif is_elite:
+        if is_elite:
             base = (f"<b>🚀 ROCKET FUEL:</b> Strong uptrend in {mode_label} name ({score}/10). "
                     f"High conviction setup. Build position on pullbacks to EMA21.")
         elif is_weak:
@@ -791,10 +809,7 @@ def comment_for_row(r: pd.Series) -> str:
                     f"Starter size now, look to add if it holds support.")
 
     elif sig == "DCA":
-        if is_zombie:
-            base = (f"<b>🩸 CATCHING KNIVES:</b> Don't do it. Stock is falling and they have <{runway:.1f}m cash. "
-                    f"Bankruptcy or massive dilution risk. Stay away.")
-        elif is_trash:
+        if is_trash:
             base = (f"<b>💣 VALUE TRAP:</b> It looks cheap, but quality is poor ({score}/10). "
                     f"Do not average down. Wait for a confirmed reversal or cut loss.")
         elif is_elite:
@@ -844,6 +859,7 @@ def comment_for_row(r: pd.Series) -> str:
     else:
         base = "Neutral – no clear edge."
 
+    # --- Specific Nuance Append ---
     if cat == "Growth" and score > 6:
         base += " <br><i>💡 Note: Efficient Growth Machine (Rule of 40).</i>"
     if cat == "Spec" and score > 6 and runway >= 18:
