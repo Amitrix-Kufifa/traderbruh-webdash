@@ -2,9 +2,17 @@ name: Build TraderBruh dashboard
 
 on:
   schedule:
-    # Weekdays at ~9:10am Sydney (22:10 UTC Mon–Fri)
-    - cron: '10 22 * * 1-5'
-  workflow_dispatch: {}   # allows manual run from the Actions tab
+    # DST-proof triggers for Sydney times:
+    # 09:30 Sydney => 22:30 UTC (AEDT) OR 23:30 UTC (AEST)
+    - cron: '30 22 * * *'
+    - cron: '30 23 * * *'
+    # 12:00 Sydney => 01:00 UTC (AEDT) OR 02:00 UTC (AEST)
+    - cron: '0 1 * * *'
+    - cron: '0 2 * * *'
+    # 16:01 Sydney => 05:01 UTC (AEDT) OR 06:01 UTC (AEST)
+    - cron: '1 5 * * *'
+    - cron: '1 6 * * *'
+  workflow_dispatch: {}   # manual run from Actions tab (always runs)
 
 permissions:
   contents: read
@@ -18,6 +26,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.gate.outputs.ok }}
 
     steps:
       - name: Checkout repo
@@ -28,15 +38,53 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Gate run time (Sydney) + weekdays
+        id: gate
+        run: |
+          python - <<'PY'
+          import os
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          event = os.environ.get("GITHUB_EVENT_NAME", "")
+          # Manual runs should always proceed
+          if event == "workflow_dispatch":
+            ok = True
+            reason = "manual dispatch"
+          else:
+            now = datetime.now(ZoneInfo("Australia/Sydney"))
+            weekday_ok = now.weekday() < 5  # Mon-Fri
+
+            # Targets: 09:30, 12:00, 16:01 Sydney
+            targets = [9*60+30, 12*60, 16*60+1]
+            now_m = now.hour*60 + now.minute
+
+            # Allow a small tolerance because scheduled workflows can start a few minutes late
+            tolerance_min = 5
+            time_ok = any(abs(now_m - t) <= tolerance_min for t in targets)
+
+            ok = weekday_ok and time_ok
+            reason = f"sydney={now.strftime('%Y-%m-%d %H:%M %Z')} weekday_ok={weekday_ok} time_ok={time_ok}"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"ok={'true' if ok else 'false'}\n")
+            f.write(f"reason={reason}\n")
+
+          print("Gate:", "RUN" if ok else "SKIP", "|", reason)
+          PY
+
       - name: Install dependencies
+        if: steps.gate.outputs.ok == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Build dashboard
+        if: steps.gate.outputs.ok == 'true'
         run: python traderbruh_web_dashboard_gh.py
 
       - name: Upload Pages artifact
+        if: steps.gate.outputs.ok == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs
@@ -44,6 +92,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
+    if: needs.build.outputs.should_deploy == 'true'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
