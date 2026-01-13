@@ -23,6 +23,17 @@ try:
 except Exception:
     HAVE_PYPDF = False
 
+# ---------------- Build / Deploy Metadata ----------------
+# These are populated automatically in GitHub Actions, but will be blank when you run locally.
+def get_build_meta() -> dict:
+    sha = os.getenv("GITHUB_SHA", "") or ""
+    run_id = os.getenv("GITHUB_RUN_ID", "") or ""
+    ref = os.getenv("GITHUB_REF_NAME", "") or os.getenv("GITHUB_REF", "") or ""
+    actor = os.getenv("GITHUB_ACTOR", "") or ""
+    # Shorten sha for display
+    sha7 = sha[:7] if sha else "local"
+    return {"sha": sha, "sha7": sha7, "run_id": run_id or "-", "ref": ref or "-", "actor": actor or "-"}
+
 # ---------------- Global Config ----------------
 OUTPUT_DIR          = "docs"
 OUTPUT_HTML         = os.path.join(OUTPUT_DIR, "index.html")
@@ -1774,6 +1785,7 @@ if __name__ == "__main__":
     # Force Sydney Time
     au_tz = zoneinfo.ZoneInfo("Australia/Sydney")
     gen_time = datetime.now(au_tz).strftime("%Y-%m-%d %H:%M:%S %Z")
+    build_meta = get_build_meta()
     
     for m, conf in MARKETS.items():
         df, news = process_market(m, conf)
@@ -1782,7 +1794,7 @@ if __name__ == "__main__":
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
     full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.6</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body>
-    <div style="text-align:center; padding:10px 0 5px 0; color:#64748b; font-size:11px; font-family:'JetBrains Mono', monospace;">Last Updated: {gen_time}</div>
+    <div style="text-align:center; padding:10px 0 5px 0; color:#64748b; font-size:11px; font-family:'JetBrains Mono', monospace;">Built: {gen_time} · Commit: {build_meta['sha7']} · Run: {build_meta['run_id']} · Ref: {build_meta['ref']} · Actor: {build_meta['actor']} · Script: Ultimate 6.6</div>
     <div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
     
     os.makedirs(OUTPUT_DIR, exist_ok=True)
