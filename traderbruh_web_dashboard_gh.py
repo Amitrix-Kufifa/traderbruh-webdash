@@ -1,12 +1,15 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 6.6 (Logic/Playbook Upgrade)
+# Version: Ultimate 6.8 (Action-Level Playbook + Market/RS Filters)
 # - Fixed breakout logic (20D/52W highs shifted to avoid self-referencing)
 # - Added HOLD + TRIM signals (explicit hodl / take-profit guidance)
 # - Optional split/dividend-adjusted indicator series (AdjClose) for cleaner long lookbacks
 # - Generic breakout/breakdown detector for multiple patterns (volume + ATR confirmation)
 # - Much more directive commentary "playbook" per ticker (entry/add/stop/trim rules)
 # - Optional in-dashboard litmus stats (median forward returns after BUY/DCA)
+# - NEW: Market regime filter (benchmark trend) + Relative Strength (leader filtering)
+# - NEW: Comment action line now includes concrete levels (entry/stop/trim)
+# - Renamed 'Litmus' → 'Past results' with simpler explanation
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -60,22 +63,54 @@ ENABLE_LITMUS_STATS = True
 LITMUS_SIGNAL_HORIZONS = (5, 20, 60)   # trading days
 LITMUS_LOOKBACK_BARS   = 252 * 6       # ~6 years for stats window
 
+
+# --- Market regime + relative strength (leader filtering) ---
+# These are optional but very useful for "robust logic":
+# - Market regime: avoid most BUY/DCA signals when the broader market is risk-off.
+# - Relative strength: prefer stocks outperforming their benchmark (leaders, not laggards).
+ENABLE_MARKET_REGIME_FILTER = True
+MARKET_FILTER_MODE = "hard"   # "hard" blocks BUY/DCA when market is risk-off; "soft" only adds caution text
+
+ENABLE_RELATIVE_STRENGTH = True
+RS_LOOKBACK_BARS = 63         # ~3 months (trading days)
+RS_SLOPE_WINDOW  = 20
+RS_MIN_OUTPERF_PCT = 0.0      # require >=0% outperformance over lookback for BUY
+
+# Benchmarks used for regime + relative strength. (We try in order; first that downloads wins.)
+BENCHMARKS = {
+    "AUS":   ["A200.AX", "^AXJO"],
+    "USA":   ["SPY", "^GSPC"],
+    "INDIA": ["^NSEI", "NIFTYBEES.NS", "INDA"],
+}
+
 RULES = {
     # BUY = momentum / trend continuation (breakout in a Stage-2 uptrend)
-    "buy":     {"rsi_min": 45, "rsi_max": 70, "vol_mult": 1.0},
+    # buffer_pct: require a small "clearance" above prior high to reduce false breaks
+    # max_dist200_pct: don't chase if already extremely stretched vs 200DMA
+    "buy": {
+        "rsi_min": 50,
+        "rsi_max": 75,
+        "vol_mult": 1.10,
+        "buffer_pct": 0.003,          # +0.3% above prior 20D high
+        "max_dist200_pct": 25.0,      # avoid chasing >25% above 200DMA
+    },
 
     # DCA = quality dip near 200DMA (intended for Core/Growth, not pure Spec)
     # allow_below_pct: allow a small undercut of 200DMA without instantly flipping to AVOID
-    "dca":     {"rsi_max": 45, "sma200_proximity": 0.05, "allow_below_pct": 0.02},
+    "dca": {
+        "rsi_max": 55,
+        "sma200_proximity": 0.04,     # within +4% of 200DMA
+        "allow_below_pct": 0.02,      # allow -2% undercut
+    },
 
-    # AVOID = damage control regime (trend broken / death cross)
-    "avoid":   {"death_cross": True},
+    # AVOID = damage control regime (trend broken / downtrend)
+    "avoid": {"death_cross": True},
 
-    # TRIM = profit-taking regime (usually triggered by euphoria conditions)
-    "trim":    {"enabled": True},
+    # TRIM = profit-taking regime (usually triggered by "extended" conditions)
+    "trim": {"enabled": True},
 
     # Risk model (used in commentary)
-    "risk":    {"atr_stop_mult": 2.0, "atr_trail_mult": 3.0, "sma200_break_pct": 0.03},
+    "risk": {"atr_stop_mult": 2.0, "atr_trail_mult": 3.0, "sma200_break_pct": 0.03},
 
     # Auto-DCA gate: gap-down reclaim setup
     "autodca": {"gap_thresh": -2.0, "fill_req": 50.0},
@@ -633,6 +668,8 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- Volume baseline ---
     x["Vol20"] = pd.to_numeric(x["Volume"], errors="coerce").rolling(20).mean()
+    x["DollarVol20"] = x["Vol20"] * x["Price"]
+
 
     # --- RSI(14) on Price ---
     chg = x["Price"].diff()
@@ -656,66 +693,115 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     return x
 
 def label_row(r: pd.Series) -> str:
-    """
-    Produces a single high-level action label for the latest bar.
+    """Map the latest bar to ONE clear action label.
 
-    Philosophy:
-    - AVOID  = chart is broken (damage control regime)
-    - TRIM   = uptrend but stretched (profit-taking / tighten stops)
-    - BUY    = breakout continuation in a healthy uptrend
-    - DCA    = pullback-to-200DMA zone in a healthy uptrend
+    Labels are intentionally opinionated and mutually exclusive:
+    - AVOID  = trend is broken / downtrend (damage control)
+    - BUY    = breakout continuation (trend + volume + leadership)
+    - DCA    = pullback-to-200DMA zone in an uptrend (quality dip)
+    - TRIM   = uptrend but *extended* (take partials / tighten stops)
     - HOLD   = uptrend intact, but no fresh edge today
     - WATCH  = no-man's land / base-building / too early
+
+    Notes:
+    - We optionally gate BUY/DCA by market regime (benchmark above rising 200DMA).
+    - We optionally gate BUY by relative strength (leaders outperforming the benchmark).
     """
     price  = float(r.get("Price", np.nan))
     sma200 = float(r.get("SMA200", np.nan))
     sma50  = float(r.get("SMA50", np.nan))
     rsi    = float(r.get("RSI14", np.nan))
     high20 = float(r.get("High20", np.nan))
-
-    vol   = float(r.get("Volume", np.nan))
-    vol20 = float(r.get("Vol20", np.nan))
-
+    vol    = float(r.get("Volume", np.nan))
+    vol20  = float(r.get("Vol20", np.nan))
+    d200   = float(r.get("Dist_to_SMA200_%", np.nan))
     sma200_slope_pct = float(r.get("SMA200_Slope_%", 0.0))
 
-    # Basic sanity
+    # Market / RS context (may be NaN if benchmark wasn't available)
+    market_up = bool(r.get("Market_Uptrend", True))
+    rs3m      = float(r.get("RS_3M_%", np.nan))
+    rs_slope  = float(r.get("RS_Slope20_%", np.nan))
+
     if not (np.isfinite(price) and np.isfinite(sma200) and np.isfinite(sma50) and np.isfinite(rsi)):
         return "WATCH"
 
     death_cross = sma50 < sma200
 
-    # Trend context
-    trend_up = (price > sma200) and (sma50 > sma200) and (sma200_slope_pct > 0)
+    # --- Damage control: Stage-4 downtrend (below & falling 200DMA) ---
+    if (price < sma200) and (sma200_slope_pct < 0):
+        return "AVOID"
 
-    # Damage control: below 200DMA, especially with death cross
+    # --- Additional 'line in the sand' under the 200DMA ---
     break_pct = float(RULES.get("risk", {}).get("sma200_break_pct", 0.03))
     broke_200 = price < sma200 * (1.0 - break_pct)
 
     if RULES.get("avoid", {}).get("death_cross", True) and death_cross and (price < sma200 or broke_200):
         return "AVOID"
 
-    # Profit-taking regime
-    if RULES.get("trim", {}).get("enabled", True) and is_euphoria(r):
-        return "TRIM"
+    # --- Trend context (Stage-2 style) ---
+    trend_up = (price > sma200) and (sma50 > sma200) and (sma200_slope_pct > 0)
 
-    # BUY: breakout above prior 20-day high in a Stage-2 uptrend
-    buy_ok = trend_up and np.isfinite(high20) and (price > high20) and (RULES["buy"]["rsi_min"] <= rsi <= RULES["buy"]["rsi_max"])
-    if buy_ok and np.isfinite(vol) and np.isfinite(vol20) and vol20 > 0:
-        buy_ok = vol >= RULES["buy"].get("vol_mult", 1.0) * vol20
+    # --- Market regime gate ---
+    market_ok = True
+    if ENABLE_MARKET_REGIME_FILTER and (str(MARKET_FILTER_MODE).lower() == "hard"):
+        market_ok = market_up
 
-    # DCA: dip near 200DMA in a healthy regime (no death-cross)
+    # --- Relative strength gate (leaders) ---
+    rs_ok = True
+    if ENABLE_RELATIVE_STRENGTH and np.isfinite(rs3m):
+        rs_ok = rs3m >= RS_MIN_OUTPERF_PCT
+        if np.isfinite(rs_slope):
+            rs_ok = rs_ok and (rs_slope > 0)
+
+    # --- BUY: breakout above prior 20-day high, with a small clearance buffer ---
+    buffer_pct = float(RULES.get("buy", {}).get("buffer_pct", 0.0))
+    trigger = high20 * (1.0 + buffer_pct) if np.isfinite(high20) else np.nan
+    max_d200 = float(RULES.get("buy", {}).get("max_dist200_pct", 1e9))
+
+    buy_ok = (
+        market_ok and rs_ok and trend_up and
+        np.isfinite(trigger) and (price > trigger) and
+        (RULES["buy"]["rsi_min"] <= rsi <= RULES["buy"]["rsi_max"])
+    )
+
+    # Don't chase super-extended moves
+    if buy_ok and np.isfinite(d200):
+        buy_ok = d200 <= max_d200
+
+    if buy_ok and np.isfinite(vol20) and vol20 > 0:
+        if not np.isfinite(vol):
+            buy_ok = False
+        else:
+            buy_ok = vol >= RULES["buy"].get("vol_mult", 1.0) * vol20
+
+    # --- DCA: dip near 200DMA, only when the 200DMA is rising ---
     allow_below = float(RULES["dca"].get("allow_below_pct", 0.02))
     dca_ok = (
+        market_ok and
+        (sma200_slope_pct > 0) and
         (price >= sma200 * (1.0 - allow_below)) and
         (price <= sma200 * (1.0 + RULES["dca"]["sma200_proximity"])) and
         (rsi <= RULES["dca"]["rsi_max"]) and
         (not death_cross)
     )
 
-    if buy_ok: return "BUY"
-    if dca_ok: return "DCA"
-    if trend_up: return "HOLD"
+    # --- TRIM: only if NOT a fresh breakout (avoid blocking BUY) ---
+    trim_ok = False
+    if RULES.get("trim", {}).get("enabled", True) and trend_up and is_euphoria(r):
+        trim_ok = True
+        if np.isfinite(trigger) and (price <= trigger * 1.02):
+            trim_ok = False
+
+    if buy_ok:
+        return "BUY"
+    if dca_ok:
+        return "DCA"
+    if trim_ok:
+        return "TRIM"
+    if trend_up:
+        return "HOLD"
     return "WATCH"
+
 
 def auto_dca_gate(ind: pd.DataFrame):
     if len(ind) < 3: return False, {"reason": "insufficient data"}
@@ -1032,207 +1118,206 @@ def breakout_ready(ind: pd.DataFrame, pat: dict, rules: dict, flag_info: dict = 
 # ---------------- Commentary Engine 2.2 (Setup Aware) ----------------
 
 def is_euphoria(r):
-    # Global helper required for both commentary and HTML rendering
-    d200 = r.get("Dist_to_SMA200_%", 0.0)
-    d52  = r.get("Dist_to_52W_High_%", 0.0)
-    rsi  = r.get("RSI14", 50.0)
-    return (d52 > -3.5) and (d200 > 40.0) and (rsi >= 70.0)
+    """Returns True when the chart looks *extended* (a good time to think about trimming).
+
+    This is NOT a prediction. It's a risk-management flag:
+    - near highs
+    - stretched vs the 200DMA and/or far above the 21EMA in ATR terms
+    """
+    try:
+        price = float(r.get("Price", r.get("Close", np.nan)))
+        d200  = float(r.get("Dist_to_SMA200_%", np.nan))
+        d52   = float(r.get("Dist_to_52W_High_%", np.nan))
+        rsi   = float(r.get("RSI14", np.nan))
+        ema21 = float(r.get("EMA21", np.nan))
+        atr   = float(r.get("ATR14", np.nan))
+
+        z_ema = np.nan
+        if np.isfinite(price) and np.isfinite(ema21) and np.isfinite(atr) and atr > 0:
+            z_ema = (price - ema21) / atr
+
+        # "Classic" euphoria: very stretched + overbought + near highs
+        cond1 = (np.isfinite(d52) and d52 > -5) and (np.isfinite(d200) and d200 > 25) and (np.isfinite(rsi) and rsi >= 75)
+
+        # "Vertical" euphoria: price far above 21EMA in ATR terms (often snaps back)
+        cond2 = (np.isfinite(d52) and d52 > -2) and (np.isfinite(z_ema) and z_ema >= 3.0) and (np.isfinite(rsi) and rsi >= 70)
+
+        return bool(cond1 or cond2)
+    except Exception:
+        return False
+
 
 def comment_for_row(r: pd.Series):
     """
     Returns (summary_html, playbook_html)
 
-    The goal is to be *directive*:
-    - What to do if you DON'T own it
-    - What to do if you DO own it
-    - Where you're wrong (invalidations / stops)
+    Goal: translate indicators into *specific actions* (levels + rules),
+    without drowning the user in verbose commentary.
     """
-    # --- Unpack metrics safely ---
+    # --- Helpers ---
+    def f(x, d=2):
+        return f"{x:.{d}f}" if np.isfinite(x) else "—"
+
     sig   = str(r.get("Signal", "WATCH")).upper()
     cat   = str(r.get("Category", "Core"))
     score = float(r.get("Fundy_Score", 0.0))
     tier  = str(r.get("Fundy_Tier", "Neutral"))
 
     price = float(r.get("Price", r.get("LastClose", np.nan)))
-    last_close = float(r.get("LastClose", price))
-
     rsi   = float(r.get("RSI14", np.nan))
-    d200  = float(r.get("Dist_to_SMA200_%", 0.0))
-    d52   = float(r.get("Dist_to_52W_High_%", 0.0))
+    d200  = float(r.get("Dist_to_SMA200_%", np.nan))
+    d52   = float(r.get("Dist_to_52W_High_%", np.nan))
 
     sma200 = float(r.get("SMA200", np.nan))
     sma50  = float(r.get("SMA50", np.nan))
     ema21  = float(r.get("EMA21", np.nan))
-    atr    = float(r.get("ATR14", np.nan))
-    atr_pct = float(r.get("ATR14_%", np.nan))
+    slope200 = float(r.get("SMA200_Slope_%", 0.0))
 
     high20 = float(r.get("High20", np.nan))
     high52 = float(r.get("High52W", np.nan))
 
-    slope200 = float(r.get("SMA200_Slope_%", 0.0))
-    death_cross = (np.isfinite(sma50) and np.isfinite(sma200) and sma50 < sma200)
+    atr   = float(r.get("ATR14", np.nan))
+    atrp  = float(r.get("ATR14_%", np.nan))
 
-    # Setups / patterns
-    pat_name   = str(r.get("_pattern_name", "") or "")
-    pat_status = str(r.get("_pattern_status", "") or "")
-    pat_conf   = float(r.get("_pattern_conf", 0.0) or 0.0)
-    pat_align  = str(r.get("_pattern_align", "") or "")
-
-    is_autodca = bool(r.get("AutoDCA_Flag", False))
-    is_breakout = bool(r.get("BreakoutReady", False))
-    brk_lvl = float(r.get("Breakout_Level", np.nan))
-    brk_dir = str(r.get("Breakout_Direction", "") or "")
+    rs3m  = float(r.get("RS_3M_%", np.nan))
+    rsslp = float(r.get("RS_Slope20_%", np.nan))
+    bench = str(r.get("Benchmark", "") or "")
+    market_up = bool(r.get("Market_Uptrend", True))
 
     fundy = r.get("Fundy", {}) or {}
     key_metric = str(fundy.get("key_metric", "-"))
-    runway = float(fundy.get("runway_months", 0.0) or 0.0)
 
-    # --- Stage / regime classification ---
-    stage = "Stage 1 (Base / Range)"
+    # --- Stage / regime classification (simple Weinstein-style) ---
+    stage = "Stage 1 (Base)"
     if np.isfinite(d200) and np.isfinite(slope200):
         if (d200 > 5.0) and (slope200 > 0):
             stage = "Stage 2 (Uptrend)"
         elif (d200 < -5.0) and (slope200 < 0):
             stage = "Stage 4 (Downtrend)"
-        elif (d200 < -2.0) and (slope200 > 0):
-            stage = "Stage 3 (Transition / Topping)"
-        elif (d200 > 2.0) and (slope200 < 0):
-            stage = "Stage 3 (Transition / Topping)"
+        elif (slope200 < 0) or (slope200 > 0 and d200 < 0):
+            stage = "Stage 3 (Transition)"
 
-    # --- Risk levels (ATR based) ---
+    # --- Emoji ---
+    emoji = {"BUY": "🟢", "DCA": "🧱", "HOLD": "🟦", "TRIM": "🟡", "WATCH": "⚪", "AVOID": "🔴"}.get(sig, "⚪")
+
+    # --- Key levels (used in action line + bullets) ---
+    buy_buf = float(RULES.get("buy", {}).get("buffer_pct", 0.0))
+    buy_trigger = high20 * (1.0 + buy_buf) if np.isfinite(high20) else np.nan
+
+    allow_below = float(RULES.get("dca", {}).get("allow_below_pct", 0.02))
+    prox = float(RULES.get("dca", {}).get("sma200_proximity", 0.04))
+    dca_low  = sma200 * (1.0 - allow_below) if np.isfinite(sma200) else np.nan
+    dca_high = sma200 * (1.0 + prox)        if np.isfinite(sma200) else np.nan
+
+    # Stops (rule-of-thumb; NOT a guarantee)
     atr_stop_mult  = float(RULES.get("risk", {}).get("atr_stop_mult", 2.0))
     atr_trail_mult = float(RULES.get("risk", {}).get("atr_trail_mult", 3.0))
+    break200 = float(RULES.get("risk", {}).get("sma200_break_pct", 0.03))
 
-    hard_stop = np.nan
+    buy_stop = (buy_trigger - atr_stop_mult * atr) if (np.isfinite(buy_trigger) and np.isfinite(atr)) else np.nan
+
+    dca_stop = np.nan
+    if np.isfinite(dca_low):
+        dca_stop = dca_low - (0.5 * atr if np.isfinite(atr) else 0.0)
+    if np.isfinite(sma200):
+        dca_stop = np.nanmin([dca_stop, sma200 * (1.0 - break200)]) if np.isfinite(dca_stop) else sma200 * (1.0 - break200)
+
     trail_stop = np.nan
-    if np.isfinite(price) and np.isfinite(atr) and atr > 0:
-        hard_stop = price - atr_stop_mult * atr
-        trail_stop = price - atr_trail_mult * atr
-        if np.isfinite(sma50):
-            trail_stop = max(trail_stop, sma50)
+    if np.isfinite(ema21) and np.isfinite(atr):
+        trail_stop = ema21 - atr_trail_mult * atr
+    if np.isfinite(sma50):
+        trail_stop = np.nanmax([trail_stop, sma50 * (1.0 - break200)]) if np.isfinite(trail_stop) else sma50 * (1.0 - break200)
 
-    # --- Entry triggers ---
-    entry_lvl = np.nan
-    entry_reason = ""
-    if is_breakout and np.isfinite(brk_lvl):
-        entry_lvl = brk_lvl
-        entry_reason = "pattern trigger"
-    elif np.isfinite(high20):
-        entry_lvl = high20
-        entry_reason = "prior 20D high"
-    elif np.isfinite(high52):
-        entry_lvl = high52
-        entry_reason = "prior 52W high"
+    # --- Market / leadership note ---
+    market_note = ""
+    if bench:
+        mood = "RISK‑ON" if market_up else "RISK‑OFF"
+        market_note = f" • {bench}: {mood}"
+    elif ENABLE_MARKET_REGIME_FILTER:
+        market_note = f" • Market: {'RISK‑ON' if market_up else 'RISK‑OFF'}"
 
-    # --- Emoji / summary line ---
-    emoji = {"BUY":"🚀","DCA":"🛒","HOLD":"🧘","TRIM":"🥂","WATCH":"👀","AVOID":"🧊"}.get(sig, "⚖️")
+    # --- Action line (specific + numeric) ---
+    action = "Wait; set alerts."
+    if sig == "BUY":
+        first_trim = (buy_trigger + 3 * atr) if (np.isfinite(buy_trigger) and np.isfinite(atr)) else np.nan
+        action = f"Entry > {f(buy_trigger)} • Stop {f(buy_stop)} • First trim ~ {f(first_trim)}"
+    elif sig == "DCA":
+        action = f"Start zone {f(dca_low)}–{f(dca_high)} • Cut if close < {f(dca_stop)}"
+    elif sig == "HOLD":
+        action = f"Hold • Add: pullback ~ {f(ema21)} or breakout > {f(buy_trigger)} • Stop < {f(trail_stop)}"
+    elif sig == "TRIM":
+        action = f"Trim 20–33% • Trail stop < {f(trail_stop)}"
+    elif sig == "AVOID":
+        action = f"Avoid/exit • Re‑enter only after reclaim > 200DMA ({f(sma200)})"
+    else:
+        action = f"Alerts: breakout > {f(buy_trigger)} • Dip zone ~ 200DMA ({f(sma200)})"
 
-    # Spec sanity: no DCA on zombies
-    is_zombie = (cat == "Spec" and runway > 0 and runway < 6.0)
+    # --- Fundamental line (short) ---
+    fundy_line = f"{cat} • {score:.1f}/10 {tier}"
+    if key_metric and key_metric != "-":
+        fundy_line += f" • {key_metric}"
 
-    # --- Summary text ---
-    fundy_line = f"{cat} • {score:.1f}/10 {tier} • {key_metric}"
-    if cat == "Spec":
-        fundy_line = f"{cat} • {score:.1f}/10 {tier} • {key_metric}"
-
+    # Quick flags (very short)
     quick_flags = []
-    if is_autodca: quick_flags.append("Auto-DCA setup")
-    if is_breakout: quick_flags.append(f"Breakout {brk_dir or ''}".strip())
-    if pat_name: quick_flags.append(f"{pat_name} ({pat_status}, {pat_conf:.2f})")
-    if is_zombie: quick_flags.append("⚠️ Dilution risk")
+    if bool(r.get("AutoDCA_Flag", False)): quick_flags.append("Auto‑DCA")
+    if bool(r.get("BreakoutReady", False)): quick_flags.append("Breakout ready")
+
+    pat_name = str(r.get("_pattern_name", "") or "")
+    pat_status = str(r.get("_pattern_status", "") or "")
+    pat_conf = float(r.get("_pattern_conf", 0.0) or 0.0)
+    palign = str(r.get("_pattern_align", "") or "")
+    if pat_name:
+        if pat_status:
+            quick_flags.append(f"{pat_name} ({pat_status}, {pat_conf:.2f})")
+        else:
+            quick_flags.append(pat_name)
+    if palign:
+        quick_flags.append(palign)
 
     flags_html = (" • " + " • ".join(quick_flags)) if quick_flags else ""
 
-    # Main directive headline per signal
-    if sig == "BUY":
-        headline = "Breakout / continuation candidate in a healthy uptrend."
-    elif sig == "DCA":
-        headline = "Dip zone near the 200DMA — accumulation only if this is a business you’d happily hold."
-    elif sig == "HOLD":
-        headline = "Trend intact — hold if owned; wait for a better entry if not."
-    elif sig == "TRIM":
-        headline = "Extended / euphoric — take some profit and tighten risk."
-    elif sig == "AVOID":
-        headline = "Damage-control regime — avoid new buys; reduce risk if holding."
-    else:
-        headline = "No clear edge today — keep on a watchlist with alerts."
+    summary = (
+        f"<b>{emoji} {sig}:</b> {action}"
+        f"<br><span style='color:var(--text-muted)'>{stage} • {fundy_line}{market_note}{flags_html}</span>"
+    )
 
-    summary = f"<b>{emoji} {sig}:</b> {headline}<br><span style='color:var(--text-muted)'>{stage} • {fundy_line}{flags_html}</span>"
-
-    # --- Playbook (actionable steps) ---
-    def _fmt(x):
-        return "-" if not np.isfinite(x) else f"{x:.2f}"
-
-    def _fmt_pct(x):
-        return "-" if not np.isfinite(x) else f"{x:.1f}%"
-
+    # --- Playbook bullets (short + directive) ---
     bullets = []
 
-    # Common context bullets
-    if np.isfinite(rsi):
-        bullets.append(f"<b>Momentum:</b> RSI {rsi:.0f} • Δ vs 200DMA {_fmt_pct(d200)} • Δ vs 52W High {_fmt_pct(d52)}")
-    if np.isfinite(atr_pct):
-        bullets.append(f"<b>Volatility:</b> ATR(14) {_fmt_pct(atr_pct)} (bigger ATR = wider stops / smaller size)")
+    ctx = []
+    if np.isfinite(rsi):  ctx.append(f"RSI {rsi:.0f}")
+    if np.isfinite(d200): ctx.append(f"vs200 {d200:+.1f}%")
+    if np.isfinite(atrp): ctx.append(f"ATR {atrp:.1f}%")
+    if np.isfinite(rs3m):
+        ctx.append(f"RS(3m) {rs3m:+.1f}%")
+    if ctx:
+        bullets.append("<b>Context:</b> " + " • ".join(ctx))
 
-    # Signal-specific guidance
     if sig == "BUY":
-        if np.isfinite(entry_lvl):
-            bullets.append(f"<b>If you DON'T own:</b> Consider a starter position only on strength: close &gt; <span class='mono'>{_fmt(entry_lvl)}</span> ({entry_reason}) with volume. Avoid buying into the middle of a range.")
-        else:
-            bullets.append("<b>If you DON'T own:</b> Starter position only if price holds above the 50DMA and prints a new swing high.")
-        bullets.append(f"<b>If you DO own:</b> Hold winners. Prefer adding on pullbacks to EMA21 (<span class='mono'>{_fmt(ema21)}</span>) rather than chasing green candles.")
-        if np.isfinite(trail_stop):
-            bullets.append(f"<b>Risk (trailing):</b> Consider a trail near <span class='mono'>{_fmt(trail_stop)}</span> (max(50DMA, {atr_trail_mult:.0f}×ATR stop)).")
-
+        bullets.append(f"<b>New:</b> Buy only after a close above <b>{f(buy_trigger)}</b> (breakout + volume).")
+        bullets.append(f"<b>If owned:</b> Hold; add only on the first pullback that respects 21EMA (~{f(ema21)}).")
+        bullets.append(f"<b>Risk:</b> If it closes back under the breakout and keeps falling → cut. Hard stop ~ <b>{f(buy_stop)}</b>.")
     elif sig == "DCA":
-        if cat == "Spec":
-            bullets.append("<b>Spec warning:</b> This is not a DCA instrument. If you buy, treat it as a trade with a hard stop (no averaging down).")
-        if np.isfinite(sma200):
-            bullets.append(f"<b>If you DON'T own:</b> Scale-in plan: 3 tranches near the 200DMA (<span class='mono'>{_fmt(sma200)}</span>). Start small; add only if it stabilizes (higher lows).")
-        bullets.append("<b>If you DO own:</b> Add only if your thesis is intact AND the chart holds 200DMA. If 200DMA breaks and stays broken → stop the bleeding (no heroic averaging).")
-        if np.isfinite(hard_stop):
-            bullets.append(f"<b>Risk (hard stop):</b> A simple line-in-the-sand is <span class='mono'>{_fmt(hard_stop)}</span> ({atr_stop_mult:.0f}×ATR below price).")
-
+        bullets.append(f"<b>New:</b> Start small in <b>{f(dca_low)}–{f(dca_high)}</b>. Add only if price holds 200DMA and prints higher‑lows.")
+        bullets.append(f"<b>If owned:</b> Add only on a reclaim day (green day / back above 21EMA ~{f(ema21)}).")
+        bullets.append(f"<b>Risk:</b> No heroic averaging. Cut if close < <b>{f(dca_stop)}</b> (200DMA break).")
     elif sig == "HOLD":
-        bullets.append("<b>If you DON'T own:</b> Patience. Wait for either (1) pullback to EMA21/50DMA or (2) breakout above prior highs.")
-        bullets.append("<b>If you DO own:</b> Do nothing. Move your stop up as the 50DMA rises. Add only on constructive pullbacks (not strength).")
-        if np.isfinite(trail_stop):
-            bullets.append(f"<b>Risk:</b> Trail near <span class='mono'>{_fmt(trail_stop)}</span> to avoid giving back a full trend leg.")
-
+        bullets.append(f"<b>New:</b> Wait. 2 triggers: (1) pullback to ~{f(ema21)} or (2) breakout > {f(buy_trigger)}.")
+        bullets.append(f"<b>If owned:</b> Hold; trail risk under ~<b>{f(trail_stop)}</b>.")
     elif sig == "TRIM":
-        bullets.append("<b>If you DON'T own:</b> Do not chase. Wait for a pullback to EMA21 / 50DMA, or a multi-week consolidation.")
-        bullets.append("<b>If you DO own:</b> Consider trimming 20–50% into strength. Raise your stop (protect gains).")
-        if np.isfinite(trail_stop):
-            bullets.append(f"<b>Risk:</b> Tighten trail near <span class='mono'>{_fmt(trail_stop)}</span>. A sharp reversal from euphoria can be fast.")
-
+        bullets.append("<b>If owned:</b> Take partial profits (20–33%) into strength; do NOT add here.")
+        bullets.append(f"<b>Trail:</b> Keep a stop under ~<b>{f(trail_stop)}</b> and wait for a pullback before re‑adding.")
+        bullets.append(f"<b>New:</b> Don’t chase; wait for a reset toward 21EMA (~{f(ema21)}).")
     elif sig == "AVOID":
-        if is_zombie:
-            bullets.append(f"<b>Zombie risk:</b> Runway ≈ {runway:.1f} months. High probability of dilution / capital raise. Avoid.")
-        bullets.append("<b>If you DON'T own:</b> Stay away until it reclaims 200DMA and the 50DMA turns back up.")
-        bullets.append("<b>If you DO own:</b> Consider reducing or exiting. If you insist on holding, define a hard invalidation (no 'hope trades').")
-        if np.isfinite(sma200):
-            bullets.append(f"<b>Recovery trigger:</b> A first step is price closing back above 200DMA (<span class='mono'>{_fmt(sma200)}</span>) and holding for multiple weeks.")
+        bullets.append("<b>New:</b> No buys while the trend is broken / below a falling 200DMA.")
+        bullets.append(f"<b>If owned:</b> Reduce risk. Re‑enter only after reclaiming 200DMA (~{f(sma200)}) and stabilising.")
+    else:
+        bullets.append(f"<b>Plan:</b> Set alerts at <b>{f(buy_trigger)}</b> (breakout) and near <b>{f(sma200)}</b> (200DMA dip zone).")
 
-    else:  # WATCH
-        if np.isfinite(entry_lvl):
-            bullets.append(f"<b>Alert:</b> Set an alert at <span class='mono'>{_fmt(entry_lvl)}</span> ({entry_reason}). If it breaks, reassess for a momentum entry.")
-        if death_cross:
-            bullets.append("<b>Trend warning:</b> Death-cross regime. Treat any rally as suspect until 50DMA recovers above 200DMA.")
-        bullets.append("<b>Plan:</b> No position is a position. Wait for trend + setup alignment.")
-
-    # Pattern alignment note
-    if pat_name:
-        bullets.append(f"<b>Structure:</b> {pat_name} • {pat_status} • conf {pat_conf:.2f} • <span class='mono'>{pat_align}</span>")
-
-    # Breakout ready note
-    if is_breakout and np.isfinite(brk_lvl):
-        bullets.append(f"<b>Breakout trigger:</b> {brk_dir.upper() if brk_dir else ''} &gt; <span class='mono'>{_fmt(brk_lvl)}</span> (needs volume).")
-
-    playbook = "<div>" + "<br>".join([f"• {b}" for b in bullets]) + "</div>"
-
+    playbook = "<br>".join([f"• {b}" for b in bullets])
     return summary, playbook
 
-# ---------------- Rendering & Parsing ----------------
+
 
 def mini_candle(ind, flag_info=None, pattern_lines=None):
     v = ind.tail(MINI_BARS).copy()
@@ -1290,12 +1375,95 @@ def parse_announcements(market_code):
             
     return pd.DataFrame(rows)
 
+
+
+def fetch_benchmark(m_code: str, m_conf: dict):
+    """Fetch a market benchmark once per market.
+
+    Returns:
+      dict(symbol, ind, uptrend, asof)
+
+    Notes:
+    - GitHub Actions 'schedule' runs in UTC, but the dashboard itself can still use local market time.
+    - If benchmark data fails, we default to 'uptrend=True' so we don't accidentally block everything.
+    """
+    if not (ENABLE_MARKET_REGIME_FILTER or ENABLE_RELATIVE_STRENGTH):
+        return {"symbol": None, "ind": None, "uptrend": True, "asof": None}
+
+    for sym in BENCHMARKS.get(m_code, []):
+        try:
+            dfb = fetch_prices(sym, m_conf["tz"])
+            if dfb is None or dfb.empty:
+                continue
+            indb = indicators(dfb)
+            if indb is None or indb.empty:
+                continue
+            last = indb.iloc[-1]
+            p = float(last.get("Price", np.nan))
+            s200 = float(last.get("SMA200", np.nan))
+            slope = float(last.get("SMA200_Slope_%", 0.0))
+            up = bool(np.isfinite(p) and np.isfinite(s200) and (p > s200) and (slope > 0))
+            asof = last.get("Date", None)
+            return {"symbol": sym, "ind": indb, "uptrend": up, "asof": asof}
+        except Exception:
+            continue
+
+    return {"symbol": None, "ind": None, "uptrend": True, "asof": None}
+
+
+def add_relative_strength(ind: pd.DataFrame, bench_ind: pd.DataFrame) -> pd.DataFrame:
+    """Adds simple relative strength fields to a stock dataframe.
+
+    We compute:
+    - RS_Line        = Price / BenchPrice
+    - RS_Slope20_%   = % change in RS_Line over RS_SLOPE_WINDOW
+    - RS_3M_%        = (stock 3M return - benchmark 3M return) in percentage points
+
+    If benchmark isn't available, we simply return the original dataframe.
+    """
+    if (not ENABLE_RELATIVE_STRENGTH) or bench_ind is None or ind is None or ind.empty:
+        return ind
+
+    try:
+        a = ind[["Date", "Price"]].copy()
+        b = bench_ind[["Date", "Price"]].copy().rename(columns={"Price": "BenchPrice"})
+        m = a.merge(b, on="Date", how="inner").sort_values("Date")
+        if m.empty:
+            return ind
+
+        rs_line = (m["Price"] / m["BenchPrice"]).replace([np.inf, -np.inf], np.nan)
+        m["RS_Line"] = rs_line
+
+        # RS slope (positive => improving leadership)
+        m["RS_Slope20_%"] = (rs_line.diff(RS_SLOPE_WINDOW) / rs_line.shift(RS_SLOPE_WINDOW)).replace([np.inf, -np.inf], np.nan) * 100.0
+
+        # Relative return (stock outperformance vs benchmark)
+        m["RS_3M_%"] = (m["Price"].pct_change(RS_LOOKBACK_BARS) - m["BenchPrice"].pct_change(RS_LOOKBACK_BARS)).replace([np.inf, -np.inf], np.nan) * 100.0
+
+        ind2 = ind.merge(m[["Date", "RS_Line", "RS_Slope20_%", "RS_3M_%"]], on="Date", how="left")
+        return ind2
+    except Exception:
+        return ind
+
 def process_market(m_code, m_conf):
     print(f"--> Analyzing {m_conf['name']}...")
     snaps = []
     frames = []
 
     news_df = parse_announcements(m_code)
+
+    # --- Market benchmark (regime + relative strength) ---
+    bench = fetch_benchmark(m_code, m_conf)
+    bench_ind = bench.get("ind", None)
+    market_up = bool(bench.get("uptrend", True))
+    m_conf["_bench"] = {
+        "symbol": bench.get("symbol", ""),
+        "uptrend": market_up,
+        "asof": bench.get("asof", None),
+    }
+    if bench.get("symbol"):
+        mood = "RISK-ON" if market_up else "RISK-OFF"
+        print(f"    Benchmark: {bench['symbol']} → {mood}")
 
     for t_key, t_meta in m_conf["tickers"].items():
         t_name, t_desc, t_cat = t_meta
@@ -1314,7 +1482,9 @@ def process_market(m_code, m_conf):
         fundy = fetch_dynamic_fundamentals(dl_sym, t_cat)
 
         # Indicators (daily bars only)
-        ind = indicators(df).dropna(subset=["High20", "RSI14", "EMA21", "Vol20", "ATR14", "SMA200", "SMA50", "Price"])
+        ind = indicators(df)
+        ind = add_relative_strength(ind, bench_ind)
+        ind = ind.dropna(subset=["High20", "RSI14", "EMA21", "Vol20", "ATR14", "SMA200", "SMA50", "Price"])
         if ind.empty:
             continue
 
@@ -1446,6 +1616,12 @@ def process_market(m_code, m_conf):
             "Dist_to_SMA200_%": float(last.get("Dist_to_SMA200_%", np.nan)),
             "Dist_to_52W_High_%": float(last.get("Dist_to_52W_High_%", np.nan)),
 
+            # Market context (benchmark + relative strength)
+            "Benchmark": str(m_conf.get("_bench", {}).get("symbol", "")),
+            "Market_Uptrend": bool(m_conf.get("_bench", {}).get("uptrend", True)),
+            "RS_3M_%": float(last.get("RS_3M_%", np.nan)),
+            "RS_Slope20_%": float(last.get("RS_Slope20_%", np.nan)),
+
             "Signal": sig,
             "SignalAuto": False,
 
@@ -1493,18 +1669,28 @@ def process_market(m_code, m_conf):
 
         for _, r in snaps_df.iterrows():
             summary, playbook = comment_for_row(r)
-
-            # Append litmus stats (if available) into playbook (keeps cards actionable + evidence-based)
+            # Append history check (if available) into playbook (fast sanity-check, not a full backtest)
             lit = r.get("_litmus", {}) or {}
             if lit:
+                # Show outcomes for the *relevant* signal (BUY vs DCA vs TRIM), otherwise default to BUY
+                sig_now = str(r.get("Signal", "BUY")).upper()
+                s = sig_now if sig_now in ("BUY", "DCA", "TRIM") else "BUY"
+                n = lit.get(f"n_{s.lower()}", None)
+
                 parts = []
                 for h in LITMUS_SIGNAL_HORIZONS:
-                    m = lit.get(f"BUY_{h}d_med", np.nan)
-                    hit = lit.get(f"BUY_{h}d_hit", np.nan)
-                    if np.isfinite(m) and np.isfinite(hit):
-                        parts.append(f"{h}d: med {m:+.1f}%, hit {hit:.0f}%")
+                    mret = lit.get(f"{s}_{h}d_med", np.nan)
+                    hit = lit.get(f"{s}_{h}d_hit", np.nan)
+                    if np.isfinite(mret) and np.isfinite(hit):
+                        parts.append(f"{h}d: typical {mret:+.1f}%, up {hit:.0f}%")
+
                 if parts:
-                    playbook += f"<br>• <b>Litmus (BUY outcomes):</b> " + " • ".join(parts)
+                    n_txt = f" (n={int(n)})" if isinstance(n, (int, np.integer)) else ""
+                    playbook += (
+                        f"<br>• <b>Past results ({s}){n_txt}:</b> "
+                        + " • ".join(parts)
+                        + " <span style='color:var(--text-muted)'>— typical=median move; up%=win rate.</span>"
+                    )
 
             # News (AUS only) — surface inside the comment so the card gets the 'News' tag
             if not news_df.empty:
@@ -1740,6 +1926,15 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
         {render_kpi('Auto-DCA', len(GATE), 'text-main')}
     </div>"""
 
+    bench = m_conf.get("_bench", {}) or {}
+    bench_sym = str(bench.get("symbol", "") or "")
+    bench_up  = bool(bench.get("uptrend", True))
+    bench_line = ""
+    if bench_sym:
+        mood = "RISK-ON" if bench_up else "RISK-OFF"
+        color = "var(--green)" if bench_up else "var(--red)"
+        bench_line = f"<div style='color:var(--text-muted);margin:-10px 0 10px 0'>Benchmark: <b>{bench_sym}</b> → <b style='color:{color}'>{mood}</b></div>"
+
     nav = f"""<div class="nav-wrapper"><div class="nav-inner">
     <a href="#{m_code}-top" class="nav-link">Main</a>
     <a href="#{m_code}-degen" class="nav-link">Degenerate Radar</a>
@@ -1755,6 +1950,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
         <div class="search-container"><input type="text" id="search-{m_code}" class="search-input" placeholder="Search {m_conf['name']}..."></div>
         <div class="container">
             <h1 id="{m_code}-top" style="margin-bottom:20px">{m_conf['name']}</h1>
+            {bench_line}
             {kpi_html}
             {html_cards}
             
@@ -1779,7 +1975,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v6.6...")
+    print("Starting TraderBruh Global Hybrid v6.8...")
     market_htmls, tab_buttons = [], []
     
     # Force Sydney Time
@@ -1793,8 +1989,8 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.6</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body>
-    <div style="text-align:center; padding:10px 0 5px 0; color:#64748b; font-size:11px; font-family:'JetBrains Mono', monospace;">Built: {gen_time} · Commit: {build_meta['sha7']} · Run: {build_meta['run_id']} · Ref: {build_meta['ref']} · Actor: {build_meta['actor']} · Script: Ultimate 6.6</div>
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.8</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body>
+    <div style="text-align:center; padding:10px 0 5px 0; color:#64748b; font-size:11px; font-family:'JetBrains Mono', monospace;">Built: {gen_time} · Commit: {build_meta['sha7']} · Run: {build_meta['run_id']} · Ref: {build_meta['ref']} · Actor: {build_meta['actor']} · Script: Ultimate 6.8</div>
     <div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
     
     os.makedirs(OUTPUT_DIR, exist_ok=True)
