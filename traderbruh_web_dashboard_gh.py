@@ -1,10 +1,12 @@
-
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 6.5 (Stable Release)
-# - Removed Delisted Tickers (ALU, DEG)
-# - Fixed NameError bug in Renderer
-# - Includes V6.2 Academic Engine + V2.1 Commentary
+# Version: Ultimate 6.6 (Logic/Playbook Upgrade)
+# - Fixed breakout logic (20D/52W highs shifted to avoid self-referencing)
+# - Added HOLD + TRIM signals (explicit hodl / take-profit guidance)
+# - Optional split/dividend-adjusted indicator series (AdjClose) for cleaner long lookbacks
+# - Generic breakout/breakdown detector for multiple patterns (volume + ATR confirmation)
+# - Much more directive commentary "playbook" per ticker (entry/add/stop/trim rules)
+# - Optional in-dashboard litmus stats (median forward returns after BUY/DCA)
 
 from datetime import datetime, time
 import os, re, glob, json
@@ -34,12 +36,40 @@ PIVOT_WINDOW        = 4
 PRICE_TOL           = 0.03
 PATTERNS_CONFIRMED_ONLY = True
 
+
+# --- Data / Backtest Safety ---
+# NOTE: yfinance 'Adj Close' is split/dividend-adjusted. Using it for indicators avoids split artifacts.
+USE_ADJUSTED_FOR_INDICATORS = True
+
+# NOTE: Appending intraday bars into a daily series can distort indicators. Kept for experimentation only.
+APPEND_INTRADAY_BAR = False
+
+# Optional: lightweight in-dashboard "litmus" stats (forward returns after signals, etc.)
+ENABLE_LITMUS_STATS = True
+LITMUS_SIGNAL_HORIZONS = (5, 20, 60)   # trading days
+LITMUS_LOOKBACK_BARS   = 252 * 6       # ~6 years for stats window
+
 RULES = {
-    "buy":     {"rsi_min": 45, "rsi_max": 70},
-    "dca":     {"rsi_max": 45, "sma200_proximity": 0.05},
+    # BUY = momentum / trend continuation (breakout in a Stage-2 uptrend)
+    "buy":     {"rsi_min": 45, "rsi_max": 70, "vol_mult": 1.0},
+
+    # DCA = quality dip near 200DMA (intended for Core/Growth, not pure Spec)
+    # allow_below_pct: allow a small undercut of 200DMA without instantly flipping to AVOID
+    "dca":     {"rsi_max": 45, "sma200_proximity": 0.05, "allow_below_pct": 0.02},
+
+    # AVOID = damage control regime (trend broken / death cross)
     "avoid":   {"death_cross": True},
+
+    # TRIM = profit-taking regime (usually triggered by euphoria conditions)
+    "trim":    {"enabled": True},
+
+    # Risk model (used in commentary)
+    "risk":    {"atr_stop_mult": 2.0, "atr_trail_mult": 3.0, "sma200_break_pct": 0.03},
+
+    # Auto-DCA gate: gap-down reclaim setup
     "autodca": {"gap_thresh": -2.0, "fill_req": 50.0},
 }
+
 
 BREAKOUT_RULES = {
     "atr_mult":   0.50,
@@ -314,13 +344,15 @@ def fetch_prices(symbol: str, tz_name: str) -> pd.DataFrame:
             elif c == "high": col_map[col] = "High"
             elif c == "low": col_map[col] = "Low"
             elif c in ("close", "price"): col_map[col] = "Close"
+            elif c in ("adj close", "adj_close", "adjclose", "adjusted close"): col_map[col] = "AdjClose"
             elif "volume" in c: col_map[col] = "Volume"
         
         df = df.rename(columns=col_map)
         needed = ["Open", "High", "Low", "Close", "Volume"]
         if any(c not in df.columns for c in needed): return pd.DataFrame()
 
-        df = df[needed].reset_index()
+        keep = needed + (["AdjClose"] if "AdjClose" in df.columns else [])
+        df = df[keep].reset_index()
         date_col = "Date" if "Date" in df.columns else df.columns[0]
         df["Date"] = pd.to_datetime(df[date_col], utc=True, errors="coerce")
 
@@ -328,7 +360,7 @@ def fetch_prices(symbol: str, tz_name: str) -> pd.DataFrame:
         now_mkt = datetime.now(market_tz)
         last_date_mkt = df["Date"].dt.tz_convert(market_tz).dt.date.max()
 
-        if (now_mkt.time() >= time(10, 0)) and (last_date_mkt < now_mkt.date()):
+        if APPEND_INTRADAY_BAR and (now_mkt.time() >= time(10, 0)) and (last_date_mkt < now_mkt.date()):
             try:
                 intr = yf.download(symbol, period="5d", interval="60m", auto_adjust=False, progress=False, prepost=False, group_by="column")
                 if intr is not None and not intr.empty:
@@ -544,38 +576,134 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
         return {"score": 0.0, "tier": "Error", "category_mode": category, "key_metric": "-", "roe": 0.0, "margin": 0.0, "debteq": 0.0, "cash": 0.0, "runway_months": 0.0, "burn_annual": 0.0}
 
 def indicators(df: pd.DataFrame) -> pd.DataFrame:
-    x = df.copy().sort_values("Date").reset_index(drop=True)
-    x["SMA20"]  = x["Close"].rolling(20).mean()
-    x["SMA50"]  = x["Close"].rolling(50).mean()
-    x["SMA200"] = x["Close"].rolling(200).mean()
-    x["EMA21"]  = x["Close"].ewm(span=21, adjust=False).mean()
-    x["High20"] = x["High"].rolling(20).max()
-    x["High52W"]= x["High"].rolling(252).max()
-    x["Vol20"]  = x["Volume"].rolling(20).mean()
+    """
+    Indicator stack used by the dashboard.
 
-    chg = x["Close"].diff()
+    Key design choices:
+    - Signals are computed on a single "Price" series.
+    - If AdjClose is present (yfinance) we can use it to avoid split/dividend artifacts in long lookbacks.
+    - Breakout highs/lows are shifted by 1 bar to avoid the "Close > rolling(max including today)" bug.
+    """
+    x = df.copy().sort_values("Date").reset_index(drop=True)
+
+    # --- Price series for indicator calculations ---
+    if USE_ADJUSTED_FOR_INDICATORS and ("AdjClose" in x.columns):
+        # AdjClose is typically aligned to last close (factor ~1 on the latest bar)
+        x["Price"] = pd.to_numeric(x["AdjClose"], errors="coerce")
+        # Approximate adjusted OHLC using the same adjustment factor as close
+        with np.errstate(divide="ignore", invalid="ignore"):
+            adj_factor = x["Price"] / pd.to_numeric(x["Close"], errors="coerce")
+        adj_factor = adj_factor.replace([np.inf, -np.inf], np.nan).fillna(1.0)
+        x["OpenI"] = pd.to_numeric(x["Open"], errors="coerce") * adj_factor
+        x["HighI"] = pd.to_numeric(x["High"], errors="coerce") * adj_factor
+        x["LowI"]  = pd.to_numeric(x["Low"],  errors="coerce") * adj_factor
+    else:
+        x["Price"] = pd.to_numeric(x["Close"], errors="coerce")
+        x["OpenI"] = pd.to_numeric(x["Open"], errors="coerce")
+        x["HighI"] = pd.to_numeric(x["High"], errors="coerce")
+        x["LowI"]  = pd.to_numeric(x["Low"],  errors="coerce")
+
+    # --- Moving averages ---
+    x["SMA20"]  = x["Price"].rolling(20).mean()
+    x["SMA50"]  = x["Price"].rolling(50).mean()
+    x["SMA200"] = x["Price"].rolling(200).mean()
+    x["EMA21"]  = x["Price"].ewm(span=21, adjust=False).mean()
+
+    # Slope proxies (useful for Stage classification)
+    x["SMA200_Slope"]    = x["SMA200"].diff(20)
+    x["SMA200_Slope_%"]  = (x["SMA200_Slope"] / x["SMA200"]).replace([np.inf, -np.inf], np.nan) * 100.0
+    x["SMA50_Slope_%"]   = (x["SMA50"].diff(10) / x["SMA50"]).replace([np.inf, -np.inf], np.nan) * 100.0
+
+    # --- Breakout reference levels (shifted by 1 bar: we compare to prior highs) ---
+    x["High20"]  = x["HighI"].shift(1).rolling(20).max()
+    x["Low20"]   = x["LowI"].shift(1).rolling(20).min()
+    x["High52W"] = x["HighI"].shift(1).rolling(252).max()
+    x["Low52W"]  = x["LowI"].shift(1).rolling(252).min()
+
+    # --- Volume baseline ---
+    x["Vol20"] = pd.to_numeric(x["Volume"], errors="coerce").rolling(20).mean()
+
+    # --- RSI(14) on Price ---
+    chg = x["Price"].diff()
     gains = chg.clip(lower=0).rolling(14).mean()
     losses = (-chg).clip(lower=0).rolling(14).mean()
     RS = gains / losses
     x["RSI14"] = 100 - (100 / (1 + RS))
 
-    x["Dist_to_52W_High_%"] = (x["Close"] / x["High52W"] - 1) * 100.0
-    x["Dist_to_SMA200_%"]   = (x["Close"] / x["SMA200"]  - 1) * 100.0
+    # --- Distances ---
+    x["Dist_to_52W_High_%"] = (x["Price"] / x["High52W"] - 1) * 100.0
+    x["Dist_to_SMA200_%"]   = (x["Price"] / x["SMA200"]  - 1) * 100.0
 
-    x["H-L"] = x["High"] - x["Low"]
-    x["H-C"] = (x["High"] - x["Close"].shift(1)).abs()
-    x["L-C"] = (x["Low"]  - x["Close"].shift(1)).abs()
+    # --- ATR(14) on adjusted OHLC (HighI/LowI) vs prior Price ---
+    x["H-L"] = x["HighI"] - x["LowI"]
+    x["H-C"] = (x["HighI"] - x["Price"].shift(1)).abs()
+    x["L-C"] = (x["LowI"]  - x["Price"].shift(1)).abs()
     x["TR"]  = x[["H-L", "H-C", "L-C"]].max(axis=1)
-    x["ATR14"] = x["TR"].rolling(14).mean()
+    x["ATR14"]   = x["TR"].rolling(14).mean()
+    x["ATR14_%"] = (x["ATR14"] / x["Price"]).replace([np.inf, -np.inf], np.nan) * 100.0
+
     return x
 
 def label_row(r: pd.Series) -> str:
-    buy_ok = (r["Close"] > r["SMA200"]) and (r["Close"] > r["High20"]) and (r["SMA50"] > r["SMA200"]) and (RULES["buy"]["rsi_min"] <= r["RSI14"] <= RULES["buy"]["rsi_max"])
-    dca_ok = (r["Close"] >= r["SMA200"]) and (r["RSI14"] < RULES["dca"]["rsi_max"]) and (r["Close"] <= r["SMA200"] * (1 + RULES["dca"]["sma200_proximity"]))
-    avoid = (r["SMA50"] < r["SMA200"]) if RULES["avoid"]["death_cross"] else False
+    """
+    Produces a single high-level action label for the latest bar.
+
+    Philosophy:
+    - AVOID  = chart is broken (damage control regime)
+    - TRIM   = uptrend but stretched (profit-taking / tighten stops)
+    - BUY    = breakout continuation in a healthy uptrend
+    - DCA    = pullback-to-200DMA zone in a healthy uptrend
+    - HOLD   = uptrend intact, but no fresh edge today
+    - WATCH  = no-man's land / base-building / too early
+    """
+    price  = float(r.get("Price", np.nan))
+    sma200 = float(r.get("SMA200", np.nan))
+    sma50  = float(r.get("SMA50", np.nan))
+    rsi    = float(r.get("RSI14", np.nan))
+    high20 = float(r.get("High20", np.nan))
+
+    vol   = float(r.get("Volume", np.nan))
+    vol20 = float(r.get("Vol20", np.nan))
+
+    sma200_slope_pct = float(r.get("SMA200_Slope_%", 0.0))
+
+    # Basic sanity
+    if not (np.isfinite(price) and np.isfinite(sma200) and np.isfinite(sma50) and np.isfinite(rsi)):
+        return "WATCH"
+
+    death_cross = sma50 < sma200
+
+    # Trend context
+    trend_up = (price > sma200) and (sma50 > sma200) and (sma200_slope_pct > 0)
+
+    # Damage control: below 200DMA, especially with death cross
+    break_pct = float(RULES.get("risk", {}).get("sma200_break_pct", 0.03))
+    broke_200 = price < sma200 * (1.0 - break_pct)
+
+    if RULES.get("avoid", {}).get("death_cross", True) and death_cross and (price < sma200 or broke_200):
+        return "AVOID"
+
+    # Profit-taking regime
+    if RULES.get("trim", {}).get("enabled", True) and is_euphoria(r):
+        return "TRIM"
+
+    # BUY: breakout above prior 20-day high in a Stage-2 uptrend
+    buy_ok = trend_up and np.isfinite(high20) and (price > high20) and (RULES["buy"]["rsi_min"] <= rsi <= RULES["buy"]["rsi_max"])
+    if buy_ok and np.isfinite(vol) and np.isfinite(vol20) and vol20 > 0:
+        buy_ok = vol >= RULES["buy"].get("vol_mult", 1.0) * vol20
+
+    # DCA: dip near 200DMA in a healthy regime (no death-cross)
+    allow_below = float(RULES["dca"].get("allow_below_pct", 0.02))
+    dca_ok = (
+        (price >= sma200 * (1.0 - allow_below)) and
+        (price <= sma200 * (1.0 + RULES["dca"]["sma200_proximity"])) and
+        (rsi <= RULES["dca"]["rsi_max"]) and
+        (not death_cross)
+    )
+
     if buy_ok: return "BUY"
     if dca_ok: return "DCA"
-    if avoid: return "AVOID"
+    if trend_up: return "HOLD"
     return "WATCH"
 
 def auto_dca_gate(ind: pd.DataFrame):
@@ -590,6 +718,54 @@ def auto_dca_gate(ind: pd.DataFrame):
     fill_pct = float(0.0 if gap_size == 0 else (D0["Close"] - D1["Open"]) / gap_size * 100.0)
     flag = reclaim_mid and above_ema21 and (fill_pct >= RULES["autodca"]["fill_req"])
     return flag, {"gap_pct": float(gap_pct), "reclaim_mid": reclaim_mid, "above_ema21": above_ema21, "gap_fill_%": fill_pct}
+
+def litmus_signal_stats(ind: pd.DataFrame, horizons=(5, 20, 60), lookback_bars=252 * 6) -> dict:
+    """
+    Lightweight "evidence check" for the dashboard.
+
+    Computes forward returns after signal days to answer:
+      "Historically, when this logic said BUY (or DCA), what tended to happen next?"
+
+    Notes:
+    - Uses close-to-close forward returns on the indicator Price series.
+    - This is NOT a full trading backtest (no slippage/commissions/execution modelling).
+    - Intended as a sanity check to spot dead signals / obvious anti-signals.
+    """
+    if ind is None or ind.empty:
+        return {}
+
+    df = ind.copy()
+
+    # Require the minimum columns needed by label_row + forward returns
+    required = ["Price", "SMA200", "SMA50", "RSI14", "High20", "Vol20", "Volume", "Dist_to_SMA200_%", "Dist_to_52W_High_%"]
+    have = [c for c in required if c in df.columns]
+    df = df.dropna(subset=have)
+    if df.empty:
+        return {}
+
+    df = df.tail(int(lookback_bars)).copy()
+    try:
+        df["SignalLit"] = df.apply(label_row, axis=1)
+    except Exception:
+        return {}
+
+    price = df["Price"]
+    out = {}
+
+    for s in ("BUY", "DCA", "TRIM"):
+        mask = df["SignalLit"] == s
+        out[f"n_{s.lower()}"] = int(mask.sum())
+        for h in horizons:
+            fwd = price.shift(-int(h)) / price - 1.0
+            vals = fwd[mask].dropna()
+            if len(vals) >= 10:
+                out[f"{s}_{h}d_med"] = float(vals.median() * 100.0)
+                out[f"{s}_{h}d_hit"] = float((vals > 0).mean() * 100.0)
+            else:
+                out[f"{s}_{h}d_med"] = np.nan
+                out[f"{s}_{h}d_hit"] = np.nan
+
+    return out
 
 def _pivots(ind, window=PIVOT_WINDOW):
     v = ind.tail(PATTERN_LOOKBACK).reset_index(drop=True).copy()
@@ -706,35 +882,141 @@ def detect_triangles(ind):
     return out
 
 def detect_flag(ind):
-    if len(ind) < 60: return False, {}
+    """Simple bull-flag detector (meant as a *setup*, not a guarantee)."""
+    if len(ind) < 60:
+        return False, {}
+
+    # Prefer adjusted indicator series if present
     look = ind.tail(40)
-    impulse = (look["Close"].max() / look["Close"].min() - 1) * 100
-    if not np.isfinite(impulse) or impulse < 12: return False, {}
+    look_p = look.get("Price", look["Close"])
+
+    impulse = (look_p.max() / look_p.min() - 1) * 100
+    if not np.isfinite(impulse) or impulse < 12:
+        return False, {}
+
     win = 14
     tail = ind.tail(max(win, 8)).copy()
+    t_price = tail.get("Price", tail["Close"])
+    t_high  = tail.get("HighI", tail["High"])
+    t_low   = tail.get("LowI", tail["Low"])
+
     x = np.arange(len(tail))
-    hi, lo = np.polyfit(x, tail["High"].values, 1), np.polyfit(x, tail["Low"].values, 1)
-    slope_pct = (hi[0] / tail["Close"].iloc[-1]) * 100
+    hi = np.polyfit(x, t_high.values, 1)
+    lo = np.polyfit(x, t_low.values, 1)
+
+    slope_pct = (hi[0] / t_price.iloc[-1]) * 100
     ch = np.polyval(hi, x[-1]) - np.polyval(lo, x[-1])
-    tight = ch <= max(0.4 * (look["Close"].max() - look["Close"].min()), 0.02 * tail["Close"].iloc[-1])
+
+    # Channel must be relatively tight vs the impulse move
+    tight = ch <= max(0.4 * (look_p.max() - look_p.min()), 0.02 * t_price.iloc[-1])
+
+    # Flag should drift sideways / gently down (not a steep collapse)
     gentle = (-0.006 <= slope_pct <= 0.002)
-    return (tight and gentle), {"hi": hi.tolist(), "lo": lo.tolist(), "win": win}
+
+    return bool(tight and gentle), {"hi": hi.tolist(), "lo": lo.tolist(), "win": win}
 
 def pattern_bias(name: str) -> str:
     if name in ("Double Bottom", "Inverse H&S", "Ascending Triangle", "Bull Flag"): return "bullish"
     if name in ("Double Top", "Head & Shoulders", "Descending Triangle"): return "bearish"
     return "neutral"
 
-def breakout_ready_dt(ind: pd.DataFrame, pat: dict, rules: dict):
-    if not pat or pat.get("name") != "Double Top": return False, {}
+def breakout_ready(ind: pd.DataFrame, pat: dict, rules: dict, flag_info: dict = None):
+    """
+    Generic breakout/breakdown detector for dashboard use (not a backtest execution engine).
+
+    We look for:
+    - Price clears a pattern trigger level by a small buffer and ATR multiple
+    - Volume confirms vs 20-day average
+
+    Returns (ready: bool, info: dict)
+      info["direction"] is "bull" or "bear"
+    """
+    if ind is None or ind.empty or not pat:
+        return False, {}
+
     last = ind.iloc[-1]
-    atr, vol, vol20 = float(last.get("ATR14", np.nan)), float(last.get("Volume", np.nan)), float(last.get("Vol20", np.nan))
-    ceiling = float(pat.get("levels", {}).get("ceiling", np.nan))
-    if not (np.isfinite(atr) and np.isfinite(vol) and np.isfinite(vol20) and np.isfinite(ceiling)): return False, {}
-    close = float(last["Close"])
-    ok_price = (close >= ceiling * (1.0 + rules["buffer_pct"])) and (close >= ceiling + rules["atr_mult"] * atr)
-    ok_vol = (vol20 > 0) and (vol >= rules["vol_mult"] * vol20)
-    return bool(ok_price and ok_vol), {"ceiling": round(ceiling, 4), "atr": round(atr, 4), "stop": round(close - atr, 4)}
+    price = float(last.get("Price", last.get("Close", np.nan)))
+    atr   = float(last.get("ATR14", np.nan))
+    vol   = float(last.get("Volume", np.nan))
+    vol20 = float(last.get("Vol20", np.nan))
+
+    if not (np.isfinite(price) and np.isfinite(atr)):
+        return False, {}
+
+    name = str(pat.get("name", ""))
+    levels = pat.get("levels", {}) or {}
+    bias = pattern_bias(name)  # bullish / bearish / neutral
+
+    # --- Determine trigger level ---
+    level = np.nan
+    level_type = ""
+
+    # Bull Flag: trigger is the upper channel value on the last bar
+    if name == "Bull Flag" and flag_info:
+        try:
+            win = int(flag_info.get("win", 14))
+            t2 = ind.tail(max(win, 8))
+            x = np.arange(len(t2))
+            hi_line = float(np.polyval(flag_info.get("hi"), x[-1]))
+            level = hi_line
+            level_type = "flag_upper"
+        except Exception:
+            level = np.nan
+
+    # Inverse H&S and H&S have 2 neckline points; compress into a single trigger
+    if not np.isfinite(level) and name in ("Inverse H&S", "Head & Shoulders"):
+        nl = float(levels.get("neck_left", np.nan))
+        nr = float(levels.get("neck_right", np.nan))
+        if np.isfinite(nl) and np.isfinite(nr):
+            level = min(nl, nr) if bias == "bullish" else max(nl, nr)
+            level_type = "neckline"
+
+    # Default mapping based on bias
+    if not np.isfinite(level):
+        if bias == "bullish":
+            for k in ("resistance", "neckline", "trigger", "ceiling"):
+                v = levels.get(k, np.nan)
+                if np.isfinite(v):
+                    level = float(v); level_type = k; break
+        elif bias == "bearish":
+            for k in ("support", "neckline", "trigger", "floor"):
+                v = levels.get(k, np.nan)
+                if np.isfinite(v):
+                    level = float(v); level_type = k; break
+        else:
+            return False, {}
+
+    if not np.isfinite(level):
+        return False, {}
+
+    # --- Confirmation rules ---
+    buffer_pct = float(rules.get("buffer_pct", 0.003))
+    atr_mult   = float(rules.get("atr_mult", 0.50))
+    vol_mult   = float(rules.get("vol_mult", 1.30))
+
+    ok_vol = True
+    if np.isfinite(vol) and np.isfinite(vol20) and vol20 > 0:
+        ok_vol = vol >= vol_mult * vol20
+
+    if bias == "bullish":
+        ok_price = (price >= level * (1.0 + buffer_pct)) and (price >= level + atr_mult * atr)
+        stop = price - atr
+        direction = "bull"
+    else:
+        ok_price = (price <= level * (1.0 - buffer_pct)) and (price <= level - atr_mult * atr)
+        stop = price + atr
+        direction = "bear"
+
+    ready = bool(ok_price and ok_vol)
+    return ready, {
+        "direction": direction,
+        "pattern": name,
+        "level": round(level, 4),
+        "level_type": level_type,
+        "atr": round(atr, 4),
+        "stop": round(stop, 4),
+        "vol_mult": vol_mult,
+    }
 
 # ---------------- Commentary Engine 2.2 (Setup Aware) ----------------
 
@@ -745,127 +1027,199 @@ def is_euphoria(r):
     rsi  = r.get("RSI14", 50.0)
     return (d52 > -3.5) and (d200 > 40.0) and (rsi >= 70.0)
 
-def comment_for_row(r: pd.Series) -> str:
-    # 1. Unpack Metrics
-    d200 = r.get("Dist_to_SMA200_%", 0.0)
-    d52  = r.get("Dist_to_52W_High_%", 0.0)
-    dist_high = abs(d52)
-    rsi  = r.get("RSI14", 50.0)
-    sig  = str(r.get("Signal", "")).upper()
-    score = r.get("Fundy_Score", 0)
-    
-    fundy = r.get("Fundy", {})
-    cat   = fundy.get("category_mode", "Core")
-    runway = fundy.get("runway_months", 999.0)
-    
-    # 2. Check Special Setups (The Fix: These override generic comments)
-    is_autodca = r.get("AutoDCA_Flag", False)
-    is_breakout = r.get("BreakoutReady", False)
-    breakout_lvl = r.get("Breakout_Level", 0.0)
+def comment_for_row(r: pd.Series):
+    """
+    Returns (summary_html, playbook_html)
 
-    # 3. Determine Archetype & Flags
-    is_elite = (score >= 7)
-    is_trash = (score < 4)
-    is_weak  = is_trash 
-    is_zombie = (cat == "Spec" and runway < 6.0 and runway > 0)
-    eup = is_euphoria(r)
-    is_oversold = (rsi <= 35.0)
+    The goal is to be *directive*:
+    - What to do if you DON'T own it
+    - What to do if you DO own it
+    - Where you're wrong (invalidations / stops)
+    """
+    # --- Unpack metrics safely ---
+    sig   = str(r.get("Signal", "WATCH")).upper()
+    cat   = str(r.get("Category", "Core"))
+    score = float(r.get("Fundy_Score", 0.0))
+    tier  = str(r.get("Fundy_Tier", "Neutral"))
 
-    mode_label = ""
-    if cat == "Core": mode_label = "Fortress"
-    elif cat == "Growth": mode_label = "Venture"
-    elif cat == "Spec": mode_label = "Survival"
+    price = float(r.get("Price", r.get("LastClose", np.nan)))
+    last_close = float(r.get("LastClose", price))
 
-    base = ""
+    rsi   = float(r.get("RSI14", np.nan))
+    d200  = float(r.get("Dist_to_SMA200_%", 0.0))
+    d52   = float(r.get("Dist_to_52W_High_%", 0.0))
 
-    # --- PRIORITY 1: ZOMBIE CHECK (Safety First) ---
-    if is_zombie:
-        return (f"<b>💀 DILUTION TRAP:</b> Chart might look okay, but cash is critical "
-                f"(<{runway:.1f}m). High risk of capital raise. Avoid.")
+    sma200 = float(r.get("SMA200", np.nan))
+    sma50  = float(r.get("SMA50", np.nan))
+    ema21  = float(r.get("EMA21", np.nan))
+    atr    = float(r.get("ATR14", np.nan))
+    atr_pct = float(r.get("ATR14_%", np.nan))
 
-    # --- PRIORITY 2: SPECIAL SETUPS (The Fix) ---
-    if is_autodca:
-        return (f"<b>⚡ AUTO-DCA TRIGGER:</b> Gap-fill setup detected. Price reclaimed "
-                f"the gap midpoint. A technical buy signal despite the broader trend.")
-    
-    if is_breakout:
-        return (f"<b>🧨 BREAKOUT READY:</b> Coiling tight under resistance "
-                f"({breakout_lvl:.2f}). Volume and ATR align. Watch for the pop.")
+    high20 = float(r.get("High20", np.nan))
+    high52 = float(r.get("High52W", np.nan))
 
-    # --- PRIORITY 3: STANDARD TREND LOGIC ---
+    slope200 = float(r.get("SMA200_Slope_%", 0.0))
+    death_cross = (np.isfinite(sma50) and np.isfinite(sma200) and sma50 < sma200)
+
+    # Setups / patterns
+    pat_name   = str(r.get("_pattern_name", "") or "")
+    pat_status = str(r.get("_pattern_status", "") or "")
+    pat_conf   = float(r.get("_pattern_conf", 0.0) or 0.0)
+    pat_align  = str(r.get("_pattern_align", "") or "")
+
+    is_autodca = bool(r.get("AutoDCA_Flag", False))
+    is_breakout = bool(r.get("BreakoutReady", False))
+    brk_lvl = float(r.get("Breakout_Level", np.nan))
+    brk_dir = str(r.get("Breakout_Direction", "") or "")
+
+    fundy = r.get("Fundy", {}) or {}
+    key_metric = str(fundy.get("key_metric", "-"))
+    runway = float(fundy.get("runway_months", 0.0) or 0.0)
+
+    # --- Stage / regime classification ---
+    stage = "Stage 1 (Base / Range)"
+    if np.isfinite(d200) and np.isfinite(slope200):
+        if (d200 > 5.0) and (slope200 > 0):
+            stage = "Stage 2 (Uptrend)"
+        elif (d200 < -5.0) and (slope200 < 0):
+            stage = "Stage 4 (Downtrend)"
+        elif (d200 < -2.0) and (slope200 > 0):
+            stage = "Stage 3 (Transition / Topping)"
+        elif (d200 > 2.0) and (slope200 < 0):
+            stage = "Stage 3 (Transition / Topping)"
+
+    # --- Risk levels (ATR based) ---
+    atr_stop_mult  = float(RULES.get("risk", {}).get("atr_stop_mult", 2.0))
+    atr_trail_mult = float(RULES.get("risk", {}).get("atr_trail_mult", 3.0))
+
+    hard_stop = np.nan
+    trail_stop = np.nan
+    if np.isfinite(price) and np.isfinite(atr) and atr > 0:
+        hard_stop = price - atr_stop_mult * atr
+        trail_stop = price - atr_trail_mult * atr
+        if np.isfinite(sma50):
+            trail_stop = max(trail_stop, sma50)
+
+    # --- Entry triggers ---
+    entry_lvl = np.nan
+    entry_reason = ""
+    if is_breakout and np.isfinite(brk_lvl):
+        entry_lvl = brk_lvl
+        entry_reason = "pattern trigger"
+    elif np.isfinite(high20):
+        entry_lvl = high20
+        entry_reason = "prior 20D high"
+    elif np.isfinite(high52):
+        entry_lvl = high52
+        entry_reason = "prior 52W high"
+
+    # --- Emoji / summary line ---
+    emoji = {"BUY":"🚀","DCA":"🛒","HOLD":"🧘","TRIM":"🥂","WATCH":"👀","AVOID":"🧊"}.get(sig, "⚖️")
+
+    # Spec sanity: no DCA on zombies
+    is_zombie = (cat == "Spec" and runway > 0 and runway < 6.0)
+
+    # --- Summary text ---
+    fundy_line = f"{cat} • {score:.1f}/10 {tier} • {key_metric}"
+    if cat == "Spec":
+        fundy_line = f"{cat} • {score:.1f}/10 {tier} • {key_metric}"
+
+    quick_flags = []
+    if is_autodca: quick_flags.append("Auto-DCA setup")
+    if is_breakout: quick_flags.append(f"Breakout {brk_dir or ''}".strip())
+    if pat_name: quick_flags.append(f"{pat_name} ({pat_status}, {pat_conf:.2f})")
+    if is_zombie: quick_flags.append("⚠️ Dilution risk")
+
+    flags_html = (" • " + " • ".join(quick_flags)) if quick_flags else ""
+
+    # Main directive headline per signal
     if sig == "BUY":
-        if is_elite:
-            base = (f"<b>🚀 ROCKET FUEL:</b> Strong uptrend in {mode_label} name ({score}/10). "
-                    f"High conviction setup. Build position on pullbacks to EMA21.")
-        elif is_weak:
-            if cat == "Spec":
-                base = (f"<b>🎲 LOTTO TICKET:</b> Momentum is hot but fundamentals are thin ({score}/10). "
-                        f"Trade the chart only – use tight trailing stops. Casino money.")
-            else:
-                base = (f"<b>🗑️ TRASH RALLY:</b> Price moving up, but business quality is low ({score}/10). "
-                        f"Rent the trade, don't own the company. Exit on first sign of weakness.")
+        headline = "Breakout / continuation candidate in a healthy uptrend."
+    elif sig == "DCA":
+        headline = "Dip zone near the 200DMA — accumulation only if this is a business you’d happily hold."
+    elif sig == "HOLD":
+        headline = "Trend intact — hold if owned; wait for a better entry if not."
+    elif sig == "TRIM":
+        headline = "Extended / euphoric — take some profit and tighten risk."
+    elif sig == "AVOID":
+        headline = "Damage-control regime — avoid new buys; reduce risk if holding."
+    else:
+        headline = "No clear edge today — keep on a watchlist with alerts."
+
+    summary = f"<b>{emoji} {sig}:</b> {headline}<br><span style='color:var(--text-muted)'>{stage} • {fundy_line}{flags_html}</span>"
+
+    # --- Playbook (actionable steps) ---
+    def _fmt(x):
+        return "-" if not np.isfinite(x) else f"{x:.2f}"
+
+    def _fmt_pct(x):
+        return "-" if not np.isfinite(x) else f"{x:.1f}%"
+
+    bullets = []
+
+    # Common context bullets
+    if np.isfinite(rsi):
+        bullets.append(f"<b>Momentum:</b> RSI {rsi:.0f} • Δ vs 200DMA {_fmt_pct(d200)} • Δ vs 52W High {_fmt_pct(d52)}")
+    if np.isfinite(atr_pct):
+        bullets.append(f"<b>Volatility:</b> ATR(14) {_fmt_pct(atr_pct)} (bigger ATR = wider stops / smaller size)")
+
+    # Signal-specific guidance
+    if sig == "BUY":
+        if np.isfinite(entry_lvl):
+            bullets.append(f"<b>If you DON'T own:</b> Consider a starter position only on strength: close &gt; <span class='mono'>{_fmt(entry_lvl)}</span> ({entry_reason}) with volume. Avoid buying into the middle of a range.")
         else:
-            base = (f"<b>✅ STANDARD BUY:</b> Healthy trend > 200DMA. Fundamentals decent ({score}/10). "
-                    f"Starter size now, look to add if it holds support.")
+            bullets.append("<b>If you DON'T own:</b> Starter position only if price holds above the 50DMA and prints a new swing high.")
+        bullets.append(f"<b>If you DO own:</b> Hold winners. Prefer adding on pullbacks to EMA21 (<span class='mono'>{_fmt(ema21)}</span>) rather than chasing green candles.")
+        if np.isfinite(trail_stop):
+            bullets.append(f"<b>Risk (trailing):</b> Consider a trail near <span class='mono'>{_fmt(trail_stop)}</span> (max(50DMA, {atr_trail_mult:.0f}×ATR stop)).")
 
     elif sig == "DCA":
-        if is_trash:
-            base = (f"<b>💣 VALUE TRAP:</b> It looks cheap, but quality is poor ({score}/10). "
-                    f"Do not average down. Wait for a confirmed reversal or cut loss.")
-        elif is_elite:
-            if is_oversold:
-                base = (f"<b>💎 GOLDEN BUCKET:</b> Elite {mode_label} ({score}/10) is deeply oversold (RSI {rsi:.0f}). "
-                        f"High probability zone for patient accumulation. Scale in.")
-            else:
-                base = (f"<b>🛒 QUALITY ON SALE:</b> Rare dip in a {score}/10 business. "
-                        f"Price near 200DMA (Δ{d200:.1f}%). Good spot to start a long-term position.")
-        else:
-            base = (f"<b>📉 SWING ZONE:</b> Testing 200DMA support. "
-                    f"Play the bounce with a stop below the line. Fundamental conviction is average.")
+        if cat == "Spec":
+            bullets.append("<b>Spec warning:</b> This is not a DCA instrument. If you buy, treat it as a trade with a hard stop (no averaging down).")
+        if np.isfinite(sma200):
+            bullets.append(f"<b>If you DON'T own:</b> Scale-in plan: 3 tranches near the 200DMA (<span class='mono'>{_fmt(sma200)}</span>). Start small; add only if it stabilizes (higher lows).")
+        bullets.append("<b>If you DO own:</b> Add only if your thesis is intact AND the chart holds 200DMA. If 200DMA breaks and stays broken → stop the bleeding (no heroic averaging).")
+        if np.isfinite(hard_stop):
+            bullets.append(f"<b>Risk (hard stop):</b> A simple line-in-the-sand is <span class='mono'>{_fmt(hard_stop)}</span> ({atr_stop_mult:.0f}×ATR below price).")
 
-    elif sig == "WATCH":
-        if eup:
-            if is_weak:
-                base = (f"<b>🚨 EXIT SCAM WARNING:</b> Weak stock ({score}/10) gone vertical. "
-                        f"RSI {rsi:.0f} is dangerous. Lock in profits immediately or tighten stops.")
-            else:
-                base = (f"<b>🍾 EUPHORIA:</b> Great company, terrible entry. RSI {rsi:.0f} is stretched. "
-                        f"Do not chase. Set alert for a pullback to EMA21.")
-        elif is_elite:
-            base = (f"<b>🎯 SNIPER LIST:</b> Elite {mode_label} ({score}/10) consolidating. "
-                    f"Stalking mode: Wait for a breakout of highs or a dip to the 50DMA.")
-        else:
-            if dist_high < 5.0:
-                base = (f"<b>🚪 KNOCKING:</b> Coiling tight, just {dist_high:.1f}% below highs. "
-                        f"Set buy-stop alert above resistance for a breakout trade.")
-            elif dist_high > 25.0:
-                base = (f"<b>🤕 REPAIRING:</b> Down {dist_high:.1f}% from highs. Trend is broken. "
-                        f"Dead money until it reclaims the 200DMA. Ignore.")
-            elif rsi > 60:
-                base = (f"<b>🔥 HEATING UP:</b> Momentum building (RSI {rsi:.0f}), but no clear entry. "
-                        f"Watch for a 'Bull Flag' pattern to form.")
-            else:
-                base = (f"<b>💤 CHOP CITY:</b> Sideways action. No edge here currently. "
-                        f"Focus capital elsewhere.")
+    elif sig == "HOLD":
+        bullets.append("<b>If you DON'T own:</b> Patience. Wait for either (1) pullback to EMA21/50DMA or (2) breakout above prior highs.")
+        bullets.append("<b>If you DO own:</b> Do nothing. Move your stop up as the 50DMA rises. Add only on constructive pullbacks (not strength).")
+        if np.isfinite(trail_stop):
+            bullets.append(f"<b>Risk:</b> Trail near <span class='mono'>{_fmt(trail_stop)}</span> to avoid giving back a full trend leg.")
+
+    elif sig == "TRIM":
+        bullets.append("<b>If you DON'T own:</b> Do not chase. Wait for a pullback to EMA21 / 50DMA, or a multi-week consolidation.")
+        bullets.append("<b>If you DO own:</b> Consider trimming 20–50% into strength. Raise your stop (protect gains).")
+        if np.isfinite(trail_stop):
+            bullets.append(f"<b>Risk:</b> Tighten trail near <span class='mono'>{_fmt(trail_stop)}</span>. A sharp reversal from euphoria can be fast.")
 
     elif sig == "AVOID":
-        if is_elite:
-            base = (f"<b>🥶 VALUE TRAP:</b> Great {mode_label} business ({score}/10) but chart is broken. "
-                    f"Don't fight the trend. Wait for a Stage 1 base to form.")
-        else:
-            base = (f"<b>💀 RADIOACTIVE:</b> Broken chart + weak fundamentals ({score}/10). "
-                    f"High opportunity cost. Remove from watchlist.")
+        if is_zombie:
+            bullets.append(f"<b>Zombie risk:</b> Runway ≈ {runway:.1f} months. High probability of dilution / capital raise. Avoid.")
+        bullets.append("<b>If you DON'T own:</b> Stay away until it reclaims 200DMA and the 50DMA turns back up.")
+        bullets.append("<b>If you DO own:</b> Consider reducing or exiting. If you insist on holding, define a hard invalidation (no 'hope trades').")
+        if np.isfinite(sma200):
+            bullets.append(f"<b>Recovery trigger:</b> A first step is price closing back above 200DMA (<span class='mono'>{_fmt(sma200)}</span>) and holding for multiple weeks.")
 
-    else:
-        base = "Neutral – no clear edge."
+    else:  # WATCH
+        if np.isfinite(entry_lvl):
+            bullets.append(f"<b>Alert:</b> Set an alert at <span class='mono'>{_fmt(entry_lvl)}</span> ({entry_reason}). If it breaks, reassess for a momentum entry.")
+        if death_cross:
+            bullets.append("<b>Trend warning:</b> Death-cross regime. Treat any rally as suspect until 50DMA recovers above 200DMA.")
+        bullets.append("<b>Plan:</b> No position is a position. Wait for trend + setup alignment.")
 
-    # --- Specific Nuance Append ---
-    if cat == "Growth" and score > 6:
-        base += " <br><i>💡 Note: Efficient Growth Machine (Rule of 40).</i>"
-    if cat == "Spec" and score > 6 and runway >= 18:
-        base += " <br><i>💡 Note: Well Funded (Runway > 18m).</i>"
+    # Pattern alignment note
+    if pat_name:
+        bullets.append(f"<b>Structure:</b> {pat_name} • {pat_status} • conf {pat_conf:.2f} • <span class='mono'>{pat_align}</span>")
 
-    return base
+    # Breakout ready note
+    if is_breakout and np.isfinite(brk_lvl):
+        bullets.append(f"<b>Breakout trigger:</b> {brk_dir.upper() if brk_dir else ''} &gt; <span class='mono'>{_fmt(brk_lvl)}</span> (needs volume).")
+
+    playbook = "<div>" + "<br>".join([f"• {b}" for b in bullets]) + "</div>"
+
+    return summary, playbook
 
 # ---------------- Rendering & Parsing ----------------
 
@@ -916,7 +1270,7 @@ def parse_announcements(market_code):
     if os.path.isdir(ANN_DIR):
         for fp in glob.glob(os.path.join(ANN_DIR, "*.pdf")):
             fname = os.path.basename(fp)
-            tick = re.search(r"([A-Z]{3})[_-]", fname)
+            tick = re.search(r"([A-Z0-9]{3,4})[_-]", fname)
             tick = tick.group(1) if tick else "?"
             text = read_pdf_first_text(fp)
             _type, tag = next(( (l, t) for l, p, t in NEWS_TYPES_REGEX if re.search(p, fname + " " + text, re.I) ), ('Announcement', 'gen'))
@@ -929,78 +1283,236 @@ def process_market(m_code, m_conf):
     print(f"--> Analyzing {m_conf['name']}...")
     snaps = []
     frames = []
-    
+
     news_df = parse_announcements(m_code)
 
     for t_key, t_meta in m_conf["tickers"].items():
         t_name, t_desc, t_cat = t_meta
-        full_sym = f"{t_key}{m_conf['suffix']}"
-        
-        df = fetch_prices(full_sym, m_conf["tz"])
-        if df.empty: continue
+
+        raw_sym = f"{t_key}{m_conf['suffix']}"
+        # Yahoo quirks: BRK.B => BRK-B, etc.
+        dl_sym = raw_sym.replace(".", "-") if (m_code == "USA" and "." in raw_sym) else raw_sym
+
+        df = fetch_prices(dl_sym, m_conf["tz"])
+        if df.empty:
+            continue
+
         df["Ticker"] = t_key
         frames.append(df)
-        
-        fundy = fetch_dynamic_fundamentals(full_sym, t_cat)
-        
-        ind = indicators(df).dropna(subset=["High20", "RSI14", "EMA21", "Vol20", "ATR14"])
-        if ind.empty: continue
+
+        fundy = fetch_dynamic_fundamentals(dl_sym, t_cat)
+
+        # Indicators (daily bars only)
+        ind = indicators(df).dropna(subset=["High20", "RSI14", "EMA21", "Vol20", "ATR14", "SMA200", "SMA50", "Price"])
+        if ind.empty:
+            continue
+
         last = ind.iloc[-1]
         sig = label_row(last)
-        
-        flag_flag, flag_det = detect_flag(ind)
-        pats = detect_double_bottom(ind) + detect_double_top(ind) + detect_inverse_hs(ind) + detect_hs(ind) + detect_triangles(ind)
-        if PATTERNS_CONFIRMED_ONLY: pats = [p for p in pats if p.get("status") == "confirmed"]
-        
-        brk_ready, brk_info = False, {}
-        if (dts := [p for p in pats if p["name"]=="Double Top"]):
-            brk_ready, brk_info = breakout_ready_dt(ind, dts[0], BREAKOUT_RULES)
-        
-        if AUTO_UPGRADE_BREAKOUT and brk_ready: sig = "BUY"
 
+        # --- Flag detection (bull flag) ---
+        flag_flag, flag_det = detect_flag(ind)
+
+        # --- Pattern detection ---
+        pats_all = (
+            detect_double_bottom(ind) +
+            detect_double_top(ind) +
+            detect_inverse_hs(ind) +
+            detect_hs(ind) +
+            detect_triangles(ind)
+        )
+
+        # Treat a detected Bull Flag as a "pattern-like" structure for alignment / breakout checks
+        flag_pat = None
+        if flag_flag:
+            confirmed = False
+            upper = np.nan
+            try:
+                win = int(flag_det.get("win", 14))
+                t2 = ind.tail(max(win, 8))
+                x = np.arange(len(t2))
+                upper = float(np.polyval(flag_det.get("hi"), x[-1]))
+                confirmed = bool(float(last.get("Price", last.get("Close"))) > upper)
+            except Exception:
+                confirmed = False
+            conf = 0.55 + (0.25 if confirmed else 0.0)
+            flag_pat = {
+                "name": "Bull Flag",
+                "status": "confirmed" if confirmed else "forming",
+                "confidence": round(min(conf, 1.0), 2),
+                "levels": {"resistance": round(float(upper), 4) if np.isfinite(upper) else np.nan},
+                "lines": None,
+            }
+            pats_all = [flag_pat] + pats_all
+
+        # Patterns for display (optionally confirmed-only)
+        pats_display = pats_all
+        if PATTERNS_CONFIRMED_ONLY:
+            pats_display = [p for p in pats_all if p.get("status") == "confirmed"]
+
+        # --- Breakout / breakdown readiness (use ALL patterns, not only confirmed) ---
+        brk_ready, brk_info = False, {}
+        # Priority order: flag/triangle/dbottom/ihs ... then bearish breakdown patterns
+        for p in pats_all:
+            ready, info = breakout_ready(ind, p, BREAKOUT_RULES, flag_det if (p.get("name") == "Bull Flag") else None)
+            if ready:
+                brk_ready, brk_info = True, info
+                break
+
+        # Auto-upgrade: bullish breakout => BUY, bearish breakdown => AVOID
+        if AUTO_UPGRADE_BREAKOUT and brk_ready:
+            if brk_info.get("direction") == "bull" and sig in ("WATCH", "HOLD", "DCA", "TRIM"):
+                sig = "BUY"
+            elif brk_info.get("direction") == "bear":
+                sig = "AVOID"
+
+        # --- Auto-DCA gate (gap reclaim) ---
         gate_flag, gate_det = auto_dca_gate(ind)
-        
-        pname = pats[0]["name"] if pats else ""
+        if gate_flag and sig in ("WATCH", "HOLD"):
+            sig = "DCA"
+
+        # --- Pattern alignment ---
+        pname = pats_display[0]["name"] if pats_display else (flag_pat["name"] if flag_pat else "")
         pbias = pattern_bias(pname)
         sig_str = str(sig).lower()
-        is_aligned = (pbias == "neutral" or sig_str == "watch") or (pbias == "bullish" and sig_str in ["buy", "dca"]) or (pbias == "bearish" and sig_str == "avoid")
+
+        # For alignment purposes, HOLD/TRIM are treated as "not fighting the tape"
+        bullish_ok = sig_str in ["buy", "dca", "hold", "trim", "watch"]
+        bearish_ok = sig_str in ["avoid", "watch"]
+
+        is_aligned = (
+            pbias == "neutral" or
+            (pbias == "bullish" and bullish_ok) or
+            (pbias == "bearish" and bearish_ok)
+        )
         palign = "ALIGNED" if is_aligned else "CONFLICT"
 
-        if t_cat == "Core" and fundy["score"] < 4: sig = "AVOID"
-        if t_cat == "Spec" and fundy["score"] < 3: sig = "AVOID"
+        # --- Fundamental safety gates (prevents "trash BUY" on nice charts) ---
+        if t_cat == "Core" and fundy["score"] < 4:
+            sig = "AVOID"
+        if t_cat == "Growth" and fundy["score"] < 3:
+            sig = "AVOID"
+        if t_cat == "Spec" and fundy["score"] < 3:
+            sig = "AVOID"
+
+        # --- Optional litmus stats (forward returns after signals) ---
+        litmus = {}
+        if ENABLE_LITMUS_STATS:
+            try:
+                litmus = litmus_signal_stats(
+                    ind,
+                    horizons=LITMUS_SIGNAL_HORIZONS,
+                    lookback_bars=LITMUS_LOOKBACK_BARS,
+                )
+            except Exception:
+                litmus = {}
+
+        # Pick a primary visible pattern (if any)
+        p0 = pats_display[0] if pats_display else (flag_pat if flag_pat else None)
 
         snaps.append({
-            "Ticker": t_key, "Name": t_name, "Desc": t_desc, "Category": t_cat,
-            "LastDate": last["Date"].strftime("%Y-%m-%d"), "LastClose": float(last["Close"]),
-            "SMA200": float(last.get("SMA200", 0.0)), "RSI14": float(last["RSI14"]),
-            "Dist_to_SMA200_%": float(last.get("Dist_to_SMA200_%", 0.0)), "Dist_to_52W_High_%": float(last["Dist_to_52W_High_%"]),
-            "Signal": sig, "SignalAuto": False, "Comment": None,
-            "Fundy_Score": fundy["score"], "Fundy_Tier": fundy["tier"], "Fundy": fundy,
-            "Flag": flag_flag, "_flag_info": flag_det,
-            "_pattern_lines": pats[0]["lines"] if pats else None,
-            "_pattern_name": pname, "_pattern_status": pats[0]["status"] if pats else "", "_pattern_conf": pats[0]["confidence"] if pats else 0,
+            "Ticker": t_key,
+            "Name": t_name,
+            "Desc": t_desc,
+            "Category": t_cat,
+
+            "LastDate": last["Date"].strftime("%Y-%m-%d"),
+            "LastClose": float(last.get("Close", np.nan)),
+            "Price": float(last.get("Price", last.get("Close", np.nan))),
+
+            "SMA50": float(last.get("SMA50", np.nan)),
+            "SMA200": float(last.get("SMA200", np.nan)),
+            "EMA21": float(last.get("EMA21", np.nan)),
+            "SMA200_Slope_%": float(last.get("SMA200_Slope_%", 0.0)),
+
+            "RSI14": float(last.get("RSI14", np.nan)),
+            "ATR14": float(last.get("ATR14", np.nan)),
+            "ATR14_%": float(last.get("ATR14_%", np.nan)),
+
+            "High20": float(last.get("High20", np.nan)),
+            "High52W": float(last.get("High52W", np.nan)),
+
+            "Dist_to_SMA200_%": float(last.get("Dist_to_SMA200_%", np.nan)),
+            "Dist_to_52W_High_%": float(last.get("Dist_to_52W_High_%", np.nan)),
+
+            "Signal": sig,
+            "SignalAuto": False,
+
+            # Commentary placeholders (filled later)
+            "Comment": None,
+            "Playbook": None,
+
+            # Fundamentals
+            "Fundy_Score": fundy.get("score", 0.0),
+            "Fundy_Tier": fundy.get("tier", "Neutral"),
+            "Fundy": fundy,
+
+            # Patterns / flags
+            "Flag": bool(flag_flag),
+            "_flag_info": flag_det,
+            "_pattern_lines": (p0.get("lines") if p0 else None),
+            "_pattern_name": (p0.get("name") if p0 else ""),
+            "_pattern_status": (p0.get("status") if p0 else ""),
+            "_pattern_conf": (p0.get("confidence") if p0 else 0.0),
             "_pattern_align": palign,
-            "AutoDCA_Flag": gate_flag, "AutoDCA_Gap_%": gate_det.get("gap_pct", 0), "AutoDCA_Fill_%": gate_det.get("gap_fill_%", 0),
-            "AutoDCA_ReclaimMid": gate_det.get("reclaim_mid", False), "AutoDCA_AboveEMA21": gate_det.get("above_ema21", False),
-            "BreakoutReady": brk_ready, "Breakout_Level": brk_info.get("ceiling", 0), "_ind": ind
+
+            # AutoDCA
+            "AutoDCA_Flag": bool(gate_flag),
+            "AutoDCA_Gap_%": float(gate_det.get("gap_pct", 0.0) or 0.0),
+            "AutoDCA_Fill_%": float(gate_det.get("gap_fill_%", 0.0) or 0.0),
+            "AutoDCA_ReclaimMid": bool(gate_det.get("reclaim_mid", False)),
+            "AutoDCA_AboveEMA21": bool(gate_det.get("above_ema21", False)),
+
+            # Breakout
+            "BreakoutReady": bool(brk_ready),
+            "Breakout_Level": float(brk_info.get("level", np.nan)),
+            "Breakout_Direction": str(brk_info.get("direction", "")),
+
+            # Litmus
+            "_litmus": litmus,
+
+            # Full indicator frame for charting
+            "_ind": ind,
         })
 
     snaps_df = pd.DataFrame(snaps)
+
     if not snaps_df.empty:
-        comments, candles, sparks = [], [], []
+        comments, playbooks, candles, sparks = [], [], [], []
+
         for _, r in snaps_df.iterrows():
-            r["Comment"] = comment_for_row(r)
-            if r["BreakoutReady"]: r["Comment"] += f" • BreakoutReady: > {r['Breakout_Level']:.2f}"
+            summary, playbook = comment_for_row(r)
+
+            # Append litmus stats (if available) into playbook (keeps cards actionable + evidence-based)
+            lit = r.get("_litmus", {}) or {}
+            if lit:
+                parts = []
+                for h in LITMUS_SIGNAL_HORIZONS:
+                    m = lit.get(f"BUY_{h}d_med", np.nan)
+                    hit = lit.get(f"BUY_{h}d_hit", np.nan)
+                    if np.isfinite(m) and np.isfinite(hit):
+                        parts.append(f"{h}d: med {m:+.1f}%, hit {hit:.0f}%")
+                if parts:
+                    playbook += f"<br>• <b>Litmus (BUY outcomes):</b> " + " • ".join(parts)
+
+            # News (AUS only) — surface inside the comment so the card gets the 'News' tag
             if not news_df.empty:
                 nd = news_df[(news_df["Ticker"] == r["Ticker"]) & (news_df["Recent"])]
-                if not nd.empty: r["Comment"] += f" • News: {nd.iloc[-1]['Headline']}"
-            comments.append(r["Comment"])
+                if not nd.empty:
+                    headline = str(nd.iloc[-1]["Headline"])
+                    summary += f" • News: {headline}"
+                    playbook += f"<br>• <b>News:</b> {headline}"
+
+            comments.append(summary)
+            playbooks.append(playbook)
             candles.append(mini_candle(r["_ind"], r["_flag_info"] if r["Flag"] else None, r["_pattern_lines"]))
             sparks.append(mini_spark(r["_ind"]))
+
         snaps_df["Comment"] = comments
+        snaps_df["Playbook"] = playbooks
         snaps_df["_mini_candle"] = candles
         snaps_df["_mini_spark"] = sparks
-        
+
     return snaps_df, news_df
 
 # ---------------- HTML Construction ----------------
@@ -1035,7 +1547,7 @@ body { background: var(--bg); background-image: radial-gradient(at 0% 0%, rgba(5
 .price-block { text-align: right; }
 .price-main { font-size: 18px; font-weight: 600; }
 .price-sub { font-size: 11px; color: var(--text-muted); }
-.metrics-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; }
+.metrics-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; }
 .metric { display: flex; flex-direction: column; }
 .metric label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
 .metric span { font-size: 13px; font-weight: 500; }
@@ -1046,6 +1558,8 @@ body { background: var(--bg); background-image: radial-gradient(at 0% 0%, rgba(5
 .badge.buy { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.2); }
 .badge.dca { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.2); }
 .badge.watch { background: rgba(59, 130, 246, 0.15); color: var(--primary); border: 1px solid rgba(59, 130, 246, 0.2); }
+.badge.hold { background: rgba(59, 130, 246, 0.10); color: var(--primary); border: 1px solid rgba(59, 130, 246, 0.18); }
+.badge.trim { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple); border: 1px solid rgba(168, 85, 247, 0.2); }
 .badge.avoid { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); border: 1px solid rgba(239, 68, 68, 0.2); }
 .badge.news { background: rgba(168, 85, 247, 0.15); color: var(--accent-purple); }
 .badge.shield-high { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.2); }
@@ -1149,9 +1663,11 @@ def render_card(r, badge_type, curr):
         <div class="metrics-row">
             <div class="metric"><label>RSI(14)</label><span class="mono" style="color:{'#ef4444' if r['RSI14']>70 else ('#10b981' if r['RSI14']>45 else '#f59e0b')}">{r['RSI14']:.0f}</span></div>
             <div class="metric"><label>vs 200DMA</label><span class="mono">{r['Dist_to_SMA200_%']:+.1f}%</span></div>
+            <div class="metric"><label>ATR%</label><span class="mono">{r['ATR14_%']:.1f}%</span></div>
             <div class="metric"><label>Key Metric</label><span class="mono">{r['Fundy']['key_metric']}</span></div>
         </div>
         <div class="comment-box">{r['Comment']}</div>
+        <div class="playbook">{r['Playbook']}</div>
         <div class="chart-container">{r['_mini_candle']}</div>
     </div>
     """
@@ -1168,6 +1684,8 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
 
     BUY   = CORE[CORE.Signal == 'BUY'].sort_values(['Fundy_Score'], ascending=False)
     DCA   = CORE[CORE.Signal == 'DCA'].sort_values(['Fundy_Score'], ascending=False)
+    HOLD  = CORE[CORE.Signal == 'HOLD'].sort_values(['Fundy_Score'], ascending=False)
+    TRIM  = CORE[CORE.Signal == 'TRIM'].sort_values(['Fundy_Score'], ascending=False)
     WATCH = CORE[CORE.Signal == 'WATCH'].sort_values(['Fundy_Score'], ascending=False)
     AVOID = CORE[CORE.Signal == 'AVOID'].sort_values(['Fundy_Score'], ascending=True)
 
@@ -1180,7 +1698,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
         for _, r in df.iterrows(): h += render_card(r, badge, m_conf['currency'])
         return h + "</div>"
 
-    html_cards = mk_card(BUY,'buy') + mk_card(DCA,'dca') + mk_card(WATCH,'watch') + mk_card(AVOID,'avoid')
+    html_cards = mk_card(BUY,'buy') + mk_card(DCA,'dca') + mk_card(HOLD,'hold') + mk_card(TRIM,'trim') + mk_card(WATCH,'watch') + mk_card(AVOID,'avoid')
 
     degen_rows = "".join([f"<tr class='searchable-item'><td><span class='ticker-badge mono'>{r['Ticker']}</span></td><td><span class='badge shield-low'>{r['Fundy_Score']} {r['Fundy_Tier']}</span></td><td>{r['Signal']}</td><td class='mono'>{r['Fundy']['key_metric']}</td><td>{r['_mini_spark']}</td></tr>" for _, r in DEGEN.iterrows()]) if not DEGEN.empty else "<tr><td colspan='5' style='text-align:center'>No Degens.</td></tr>"
     
@@ -1203,6 +1721,8 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     kpi_html = f"""<div class="kpi-scroll">
         {render_kpi('Buy', len(BUY), 'text-green')}
         {render_kpi('DCA', len(DCA), 'text-amber')}
+        {render_kpi('Hold', len(HOLD), 'text-primary')}
+        {render_kpi('Trim', len(TRIM), 'text-purple')}
         {render_kpi('Watch', len(WATCH), 'text-primary')}
         {render_kpi('Avoid', len(AVOID), 'text-red')}
         {render_kpi('Degens', len(DEGEN), 'text-purple')}
@@ -1210,7 +1730,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     </div>"""
 
     nav = f"""<div class="nav-wrapper"><div class="nav-inner">
-    <a href="#{m_code}-buy" class="nav-link">Main</a>
+    <a href="#{m_code}-top" class="nav-link">Main</a>
     <a href="#{m_code}-degen" class="nav-link">Degenerate Radar</a>
     <a href="#{m_code}-gate" class="nav-link">Auto-DCA</a>
     <a href="#{m_code}-patterns" class="nav-link">Patterns</a>
@@ -1223,7 +1743,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
         {nav}
         <div class="search-container"><input type="text" id="search-{m_code}" class="search-input" placeholder="Search {m_conf['name']}..."></div>
         <div class="container">
-            <h1 style="margin-bottom:20px">{m_conf['name']}</h1>
+            <h1 id="{m_code}-top" style="margin-bottom:20px">{m_conf['name']}</h1>
             {kpi_html}
             {html_cards}
             
@@ -1248,7 +1768,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v6.5...")
+    print("Starting TraderBruh Global Hybrid v6.6...")
     market_htmls, tab_buttons = [], []
     
     # Force Sydney Time
@@ -1261,7 +1781,7 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.5</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body>
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.6</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body>
     <div style="text-align:center; padding:10px 0 5px 0; color:#64748b; font-size:11px; font-family:'JetBrains Mono', monospace;">Last Updated: {gen_time}</div>
     <div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
     
