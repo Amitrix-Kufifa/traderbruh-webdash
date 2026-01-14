@@ -1195,38 +1195,66 @@ def backtest_investor_variant2(
 
 
 def render_backtest_block(bt: dict, bench_symbol: str = "") -> str:
+    """Render an investor-style *portfolio simulation* summary.
+
+    IMPORTANT:
+    - Return is the total portfolio % change over the window (cash included).
+    - Trade win% is the share of CLOSED exits that were profitable.
+      It is NOT a 'success probability' for the whole strategy.
+    """
     if not bt or not bt.get("windows"):
         return ""
+
+    meta = bt.get("meta", {}) or {}
+    max_pos = int(meta.get("max_positions", BACKTEST_MAX_POSITIONS))
+    fee_bps = float(BACKTEST_FEE_BPS)
+
     rows = ""
     for w, s in bt.get("windows", {}).items():
         b = (bt.get("benchmark", {}) or {}).get(w, {})
         btxt = ""
         if b:
-            btxt = f"<div class='muted' style='font-size:12px'>Benchmark ({bench_symbol}): {b.get('return_pct','')}% return, {b.get('max_drawdown_pct','')}% maxDD</div>"
+            btxt = (
+                f"<div class='muted' style='font-size:12px'>"
+                f"Benchmark ({bench_symbol}): {b.get('return_pct','')}% return, {b.get('max_drawdown_pct','')}% maxDD"
+                f"</div>"
+            )
+
+        win = s.get("win_rate_pct")
+        win_txt = "—" if win is None else f"{win}%"
+
         rows += f"""<tr>
             <td class='mono'>{w}</td>
             <td class='mono'>{s.get('return_pct','')}%</td>
             <td class='mono'>{s.get('max_drawdown_pct','')}%</td>
             <td class='mono'>{s.get('trades','')}</td>
-            <td class='mono'>{'' if s.get('win_rate_pct') is None else str(s.get('win_rate_pct'))+'%'}</td>
+            <td class='mono'>{win_txt}</td>
             <td class='mono'>{s.get('avg_invested_pct','')}%</td>
         </tr>""" + f"<tr><td colspan='6' style='padding-top:0;border-top:none'>{btxt}</td></tr>"
+
     return f"""<div class='card' style='margin-top:10px'>
-        <div style='display:flex;justify-content:space-between;align-items:baseline;gap:10px'>
-            <div style='font-weight:700'>Backtest (Investor Variant 2)</div>
-            <div class='muted' style='font-size:12px'>Start cash → enter on BUY/DCA Dip/DCA Reclaim · exit on AVOID · trim on TRIM · next-open execution</div>
+        <div style='display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap'>
+            <div>
+                <div style='font-weight:700'>Simulation (Investor Variant 2)</div>
+                <div class='muted' style='font-size:12px;margin-top:2px'>
+                    Start from cash. Buy next open on <span class='mono'>BUY / DCA Dip / DCA Reclaim</span> · trim on <span class='mono'>TRIM</span> · exit on <span class='mono'>AVOID</span>.
+                </div>
+            </div>
+            <div class='muted' style='font-size:12px'>Equal-lot · max {max_pos} positions · fee {fee_bps:.0f} bps/side</div>
         </div>
         <div class='table-responsive' style='margin-top:10px'>
         <table>
             <thead><tr>
-                <th>Window</th><th>Return</th><th>Max DD</th><th>Trades</th><th>Win%</th><th>Avg Invested</th>
+                <th>Window</th><th>Return</th><th>Max DD</th><th>Closed trades</th><th>Trade win%</th><th>Avg invested</th>
             </tr></thead>
             <tbody>{rows}</tbody>
         </table>
         </div>
+        <div class='muted' style='font-size:12px;margin-top:8px;line-height:1.35'>
+            How to read: <span class='mono'>Return</span> is the portfolio % change over the window (cash included). <span class='mono'>Trade win%</span> is the share of completed exits that were profitable (not “chance of making money”). <span class='mono'>Avg invested</span> shows how much capital was deployed on average.
+        </div>
         <div class='muted' style='font-size:12px;margin-top:6px'>Note: excludes pattern-based upgrades to avoid lookahead bias; uses current signal rules on historical prices.</div>
     </div>"""
-
 
 def _pivots(ind, window=PIVOT_WINDOW):
     v = ind.tail(PATTERN_LOOKBACK).reset_index(drop=True).copy()
@@ -1780,6 +1808,16 @@ def mini_candle(ind, flag_info=None, pattern_lines=None):
                 line=dict(color="rgba(56,189,248,0.85)", width=1),
             )
         )
+
+    if "SMA50" in v.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=v["Date"],
+                y=v["SMA50"],
+                mode="lines",
+                line=dict(color="rgba(203,213,225,0.35)", width=1, dash="dot"),
+            )
+        )
     if "SMA200" in v.columns:
         fig.add_trace(
             go.Scatter(
@@ -2258,13 +2296,9 @@ def process_market(m_code, m_conf):
             lit = r.get("_litmus", {}) or {}
             if lit:
                 # Show outcomes for the *relevant* signal, otherwise default to BUY.
-                # Normalise to keys used in the litmus dict: BUY, TRIM, DCA_DIP, DCA_RECLAIM
-                sig_now = str(r.get("Signal", "BUY")).upper().replace(" ", "_")
+                sig_now = str(r.get("Signal", "BUY")).upper()
                 if sig_now.startswith("DCA"):
-                    if "RECLAIM" in sig_now:
-                        s = "DCA_RECLAIM"
-                    else:
-                        s = "DCA_DIP"
+                    s = sig_now
                 elif sig_now in ("BUY", "TRIM"):
                     s = sig_now
                 else:
@@ -2286,7 +2320,7 @@ def process_market(m_code, m_conf):
 
                     def fmt_one(h):
                         med, hit = by_h[h]
-                        hl = {5: '~1 week', 20: '~1 month', 60: '~3 months'}.get(int(h), f'{int(h)}d')
+                        hl = {5: "~1 week", 20: "~1 month", 60: "~3 months"}.get(int(h), f"{int(h)}d")
                         return f"{hl}: typical {med:+.1f}%, higher {hit:.0f}%"
 
                     chosen = [h for h in horizon_order if h in by_h][:2]
@@ -2396,9 +2430,11 @@ body { background: var(--bg); background-image: radial-gradient(at 0% 0%, rgba(5
 .pb-txt { font-size:13.5px; line-height:1.35; color: rgba(255,255,255,0.90); }
 
 .chart-container { margin-top: 10px; }
-.chart-key { display:flex; gap:10px; align-items:center; margin-top:6px; font-size:12px; color: var(--text-muted); }
+.chart-key { display:flex; gap:12px; align-items:center; margin-top:6px; font-size:12px; color: var(--text-muted); flex-wrap:wrap; }
+.key-item { display:inline-flex; align-items:center; gap:6px; }
 .sw { width:10px; height:10px; border-radius:3px; display:inline-block; margin-right:6px; border: 1px solid rgba(255,255,255,0.12); }
 .sw-ema { background: rgba(56,189,248,0.85); }
+.sw-50 { background: rgba(203,213,225,0.35); }
 .sw-200 { background: rgba(148,163,184,0.55); }
 .playbook { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; color: #e2e8f0; line-height: 1.6; }
 .playbook b { color: white; }
@@ -2479,8 +2515,24 @@ def render_card(r, badge_type, curr):
     news_tag = '<span class="badge news" style="margin-left:6px">News</span>' if "News:" in (r['Comment'] or "") else ""
     chart_key = ""
     if CHART_KEY_IN_CARD:
+        def _fmt(x):
+            try:
+                return f"{float(x):.2f}" if np.isfinite(float(x)) else "—"
+            except Exception:
+                return "—"
+
+        ema = r.get("EMA21", np.nan)
+        s50 = r.get("SMA50", np.nan)
+        s200 = r.get("SMA200", np.nan)
+
         chart_key = (
-            "<div class=\"chart-key\">" "<span class=\"sw sw-ema\"></span>EMA21" "<span class=\"sw sw-200\"></span>200DMA" "</div>")
+            f"<div class=\"chart-key\">"
+            f"<span class='key-item'><span class='sw sw-ema'></span>EMA21 <span class='mono'>{_fmt(ema)}</span></span>"
+            f"<span class='key-item'><span class='sw sw-50'></span>SMA50 <span class='mono'>{_fmt(s50)}</span></span>"
+            f"<span class='key-item'><span class='sw sw-200'></span>200DMA <span class='mono'>{_fmt(s200)}</span></span>"
+            f"</div>"
+            f"<div class='muted' style='font-size:11px;margin-top:2px'>EMA21 hugs the candles; 200DMA is the slow long-term line.</div>"
+        )
     
     score = r['Fundy_Score']
     cat = r['Category']
@@ -2605,6 +2657,8 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     # Market regime is used in logic, but we keep the UI clean (no benchmark banner).
     bench_line = ""
 
+    bt_section = f"<h2 id='{m_code}-sim' style='margin-top:40px'>Simulation</h2>" + bt_html if bt_html else ""
+
     nav = f"""<div class="nav-wrapper"><div class="nav-inner">
     <a href="#{m_code}-top" class="nav-link">Main</a>
     <a href="#{m_code}-degen" class="nav-link">Degenerate Radar</a>
@@ -2622,7 +2676,6 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
             <h1 id="{m_code}-top" style="margin-bottom:20px">{m_conf['name']}</h1>
             {bench_line}
             {kpi_html}
-            {bt_html}
             {html_cards}
             
             <h2 id="{m_code}-degen" style="margin-top:40px">Degenerate Radar (Spec Only)</h2>
@@ -2640,13 +2693,14 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
             <h2 id="{m_code}-fundy" style="margin-top:40px">Deep Fundamentals</h2>
             <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>Key Metric</th><th>ROE</th><th>Debt/Eq</th><th>Cat</th></tr></thead><tbody>{f_rows}</tbody></table></div></div>
             
-            <div style="height:50px"></div>
+            {bt_section}
+            <div style=\"height:50px\"></div>
         </div>
     </div>
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v7.2.1...")
+    print("Starting TraderBruh Global Hybrid v7.3...")
     market_htmls, tab_buttons = [], []
     
     # Force Sydney Time
@@ -2660,7 +2714,7 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v6.8</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body>
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v7.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body>
     <div style="text-align:center; padding:10px 0 5px 0; color:#64748b; font-size:11px; font-family:'JetBrains Mono', monospace;">Built: {gen_time} · Copyright @Amitesh</div>
     <div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
     
