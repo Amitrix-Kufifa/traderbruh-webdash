@@ -2258,9 +2258,13 @@ def process_market(m_code, m_conf):
             lit = r.get("_litmus", {}) or {}
             if lit:
                 # Show outcomes for the *relevant* signal, otherwise default to BUY.
-                sig_now = str(r.get("Signal", "BUY")).upper()
+                # Normalise to keys used in the litmus dict: BUY, TRIM, DCA_DIP, DCA_RECLAIM
+                sig_now = str(r.get("Signal", "BUY")).upper().replace(" ", "_")
                 if sig_now.startswith("DCA"):
-                    s = sig_now
+                    if "RECLAIM" in sig_now:
+                        s = "DCA_RECLAIM"
+                    else:
+                        s = "DCA_DIP"
                 elif sig_now in ("BUY", "TRIM"):
                     s = sig_now
                 else:
@@ -2282,7 +2286,7 @@ def process_market(m_code, m_conf):
 
                     def fmt_one(h):
                         med, hit = by_h[h]
-                        hl = hlabel(h)
+                        hl = {5: '~1 week', 20: '~1 month', 60: '~3 months'}.get(int(h), f'{int(h)}d')
                         return f"{hl}: typical {med:+.1f}%, higher {hit:.0f}%"
 
                     chosen = [h for h in horizon_order if h in by_h][:2]
@@ -2642,7 +2646,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v6.8...")
+    print("Starting TraderBruh Global Hybrid v7.2.1...")
     market_htmls, tab_buttons = [], []
     
     # Force Sydney Time
