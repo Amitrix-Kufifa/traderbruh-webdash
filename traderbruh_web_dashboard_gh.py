@@ -58,10 +58,27 @@ USE_ADJUSTED_FOR_INDICATORS = True
 # NOTE: Appending intraday bars into a daily series can distort indicators. Kept for experimentation only.
 APPEND_INTRADAY_BAR = False
 
+
+# Chart cleanliness toggles
+CHART_SHOW_PATTERN_LINES = False   # show pattern levels on mini charts (can get busy)
+CHART_SHOW_FLAG_CHANNEL  = False   # show bull-flag channel on mini charts
+CHART_KEY_IN_CARD         = True   # show a small chart key under each mini chart
 # Optional: lightweight in-dashboard "litmus" stats (forward returns after signals, etc.)
 ENABLE_LITMUS_STATS = True
 LITMUS_SIGNAL_HORIZONS = (5, 20, 60)   # trading days
 LITMUS_LOOKBACK_BARS   = 252 * 6       # ~6 years for stats window
+
+# Optional: investor-mode "real answer" backtest (Variant 2)
+# Variant 2 = start from cash; only enter on BUY / DCA Dip / DCA Reclaim; exit on AVOID; trim on TRIM.
+# This is NOT a guarantee of future performance—just a structured historical sanity-check.
+ENABLE_BACKTEST_REPORT = True
+BACKTEST_WINDOWS = {"3m": 63, "6m": 126}   # trading days
+BACKTEST_MAX_POSITIONS = 12                # portfolio capacity (equal-lot sizing)
+BACKTEST_DCA_MAX_LOTS = 2                  # cap adds per name (2 lots max)
+BACKTEST_DCA_ADD_FRACTION = 0.5            # add-size vs base lot (0.5 = half-lot adds)
+BACKTEST_TRIM_FRACTION = 0.33              # when TRIM triggers, sell this fraction of position
+BACKTEST_FEE_BPS = 10                      # 10 bps per trade side (rough friction estimate)
+
 
 
 # --- Market regime + relative strength (leader filtering) ---
@@ -895,6 +912,322 @@ def litmus_signal_stats(ind: pd.DataFrame, horizons=(5, 20, 60), lookback_bars=2
 
     return out
 
+
+def _max_drawdown(equity: pd.Series) -> float:
+    if equity is None or len(equity) == 0:
+        return 0.0
+    peak = equity.cummax()
+    dd = (equity / peak) - 1.0
+    return float(dd.min())
+
+def backtest_investor_variant2(
+    ind_map: dict,
+    score_map: dict,
+    bench_ind: pd.DataFrame = None,
+    windows: dict = None,
+):
+    """Investor-mode backtest (Variant 2): start from cash; enter on signals; manage with TRIM/AVOID.
+
+    Implementation notes:
+    - Trades execute on next day's Open (simple + avoids same-bar lookahead).
+    - Uses the dashboard's *label_row* signals (no pattern-based auto-upgrades to avoid lookahead).
+    - Equal-lot sizing up to BACKTEST_MAX_POSITIONS; leftover stays in cash.
+    - DCA adds are capped by BACKTEST_DCA_MAX_LOTS.
+    - Very simple friction model via BACKTEST_FEE_BPS.
+    """
+    if windows is None:
+        windows = BACKTEST_WINDOWS
+
+    # Build per-ticker lookup frames indexed by Date
+    data = {}
+    for t, df in (ind_map or {}).items():
+        if df is None or df.empty:
+            continue
+        dfx = df.copy()
+        if "Date" not in dfx.columns:
+            continue
+        dfx = dfx.sort_values("Date").drop_duplicates("Date")
+        dfx = dfx.set_index("Date")
+        # Ensure required fields exist
+        for c in ["Open", "Close", "Price"]:
+            if c not in dfx.columns:
+                # fall back to Close for Price if needed
+                if c == "Price" and "Close" in dfx.columns:
+                    dfx[c] = dfx["Close"]
+        data[t] = dfx
+
+    if not data:
+        return None
+
+    # Determine a master calendar (prefer benchmark dates if available)
+    if bench_ind is not None and (not bench_ind.empty) and ("Date" in bench_ind.columns):
+        cal = bench_ind[["Date", "Price"]].dropna().sort_values("Date")
+        cal = cal.drop_duplicates("Date").set_index("Date")
+        dates_all = list(cal.index)
+    else:
+        # union of all dates
+        dates_all = sorted(set().union(*[set(df.index) for df in data.values()]))
+
+    if len(dates_all) < 10:
+        return None
+
+    # Precompute signal series for each ticker (vectorized-ish)
+    sigs = {}
+    for t, df in data.items():
+        try:
+            # label_row expects a Series; apply on each row
+            sigs[t] = df.apply(label_row, axis=1)
+        except Exception:
+            continue
+
+    # Rank helper
+    pri = {"BUY": 3, "DCA_RECLAIM": 2, "DCA_DIP": 1}
+    def _rank(t, sig, asof_row):
+        s = pri.get(str(sig), 0)
+        rs = float(asof_row.get("RS_3M_%", 0.0)) if asof_row is not None else 0.0
+        sc = float((score_map or {}).get(t, 0.0))
+        return (s, rs, sc)
+
+    fee = float(BACKTEST_FEE_BPS) / 10000.0
+
+    out = {"windows": {}, "meta": {"mode": "Investor Variant 2", "max_positions": int(BACKTEST_MAX_POSITIONS)}}
+
+    # Benchmark stats per window
+    bench_stats = {}
+
+    for w_name, n_days in windows.items():
+        try:
+            n_days = int(n_days)
+        except Exception:
+            continue
+        if n_days < 5:
+            continue
+
+        # Use the last n_days+1 bars so we can trade on next open
+        dates = dates_all[-(n_days + 2):]
+        if len(dates) < 10:
+            continue
+
+        equity0 = 100000.0
+        cash = equity0
+        positions = {}  # t -> dict(shares, lots, avg_cost)
+        trade_wins = 0
+        trade_count = 0
+        exposure_acc = 0.0
+        exposure_n = 0
+
+        eq_series = []
+
+        base_lot_value = equity0 / float(BACKTEST_MAX_POSITIONS)
+
+        for i in range(len(dates) - 1):
+            d = dates[i]
+            d_next = dates[i + 1]
+
+            # Mark-to-market at close on d
+            equity = cash
+            invested = 0.0
+            for t, pos in list(positions.items()):
+                df = data.get(t)
+                if df is None or d not in df.index:
+                    continue
+                px = float(df.loc[d].get("Close", df.loc[d].get("Price", np.nan)))
+                if not np.isfinite(px):
+                    continue
+                invested += pos["shares"] * px
+            equity += invested
+            eq_series.append((d, equity))
+
+            exposure_acc += (invested / equity) if equity > 0 else 0.0
+            exposure_n += 1
+
+            # Signals on d
+            exit_list = []
+            trim_list = []
+            add_list = []
+            entry_cands = []
+
+            # Existing positions: decide exits/trims/adds
+            for t in list(positions.keys()):
+                df = data.get(t)
+                if df is None or d not in df.index:
+                    continue
+                sig = str(sigs.get(t, pd.Series()).get(d, "WATCH"))
+                if sig == "AVOID":
+                    exit_list.append(t)
+                elif sig == "TRIM":
+                    trim_list.append(t)
+                elif sig in ("DCA_DIP", "DCA_RECLAIM") and positions[t].get("lots", 1) < int(BACKTEST_DCA_MAX_LOTS):
+                    add_list.append(t)
+
+            # New entries
+            for t, df in data.items():
+                if t in positions:
+                    continue
+                if d not in df.index:
+                    continue
+                sig = str(sigs.get(t, pd.Series()).get(d, "WATCH"))
+                if sig in ("BUY", "DCA_DIP", "DCA_RECLAIM"):
+                    entry_cands.append((t, sig, df.loc[d]))
+
+            # Execute exits at next open
+            for t in exit_list:
+                df = data.get(t)
+                if df is None or d_next not in df.index:
+                    continue
+                open_px = float(df.loc[d_next].get("Open", np.nan))
+                if not np.isfinite(open_px):
+                    continue
+                sell_px = open_px * (1.0 - fee)
+                sh = positions[t]["shares"]
+                cash += sh * sell_px
+                # Win/loss vs avg_cost
+                avg_cost = float(positions[t].get("avg_cost", open_px))
+                pnl = (sell_px - avg_cost) / avg_cost if avg_cost > 0 else 0.0
+                trade_count += 1
+                trade_wins += 1 if pnl > 0 else 0
+                positions.pop(t, None)
+
+            # Execute trims at next open
+            for t in trim_list:
+                if t not in positions:
+                    continue
+                df = data.get(t)
+                if df is None or d_next not in df.index:
+                    continue
+                open_px = float(df.loc[d_next].get("Open", np.nan))
+                if not np.isfinite(open_px):
+                    continue
+                sell_px = open_px * (1.0 - fee)
+                sh = positions[t]["shares"]
+                sell_sh = sh * float(BACKTEST_TRIM_FRACTION)
+                if sell_sh <= 0:
+                    continue
+                positions[t]["shares"] = sh - sell_sh
+                cash += sell_sh * sell_px
+                # keep avg_cost unchanged
+
+            # Execute adds at next open (half-lot by default)
+            for t in add_list:
+                if t not in positions:
+                    continue
+                df = data.get(t)
+                if df is None or d_next not in df.index:
+                    continue
+                open_px = float(df.loc[d_next].get("Open", np.nan))
+                if not np.isfinite(open_px):
+                    continue
+                buy_px = open_px * (1.0 + fee)
+                add_value = base_lot_value * float(BACKTEST_DCA_ADD_FRACTION)
+                if cash < add_value:
+                    continue
+                add_sh = add_value / buy_px
+                # update avg_cost
+                old_sh = positions[t]["shares"]
+                old_cost = float(positions[t].get("avg_cost", buy_px))
+                new_sh = old_sh + add_sh
+                new_cost = (old_sh * old_cost + add_sh * buy_px) / new_sh
+                positions[t]["shares"] = new_sh
+                positions[t]["avg_cost"] = new_cost
+                positions[t]["lots"] = positions[t].get("lots", 1) + float(BACKTEST_DCA_ADD_FRACTION)
+                cash -= add_value
+
+            # Execute entries at next open (ranked) until capacity / cash
+            slots_left = int(BACKTEST_MAX_POSITIONS) - len(positions)
+            if slots_left > 0 and entry_cands:
+                entry_cands.sort(key=lambda x: _rank(x[0], x[1], x[2]), reverse=True)
+                for (t, sig, row) in entry_cands[:slots_left]:
+                    df = data.get(t)
+                    if df is None or d_next not in df.index:
+                        continue
+                    if cash < base_lot_value:
+                        break
+                    open_px = float(df.loc[d_next].get("Open", np.nan))
+                    if not np.isfinite(open_px):
+                        continue
+                    buy_px = open_px * (1.0 + fee)
+                    sh = base_lot_value / buy_px
+                    positions[t] = {"shares": sh, "avg_cost": buy_px, "lots": 1.0, "entry_sig": str(sig)}
+                    cash -= base_lot_value
+
+        # Final equity at last close
+        d_last = dates[-1]
+        equity = cash
+        for t, pos in positions.items():
+            df = data.get(t)
+            if df is None or d_last not in df.index:
+                continue
+            px = float(df.loc[d_last].get("Close", df.loc[d_last].get("Price", np.nan)))
+            if not np.isfinite(px):
+                continue
+            equity += pos["shares"] * px
+        eq_series.append((d_last, equity))
+
+        eq = pd.Series([v for _, v in eq_series], index=[d for d, _ in eq_series])
+        ret = (eq.iloc[-1] / eq.iloc[0] - 1.0) if len(eq) > 1 else 0.0
+        mdd = _max_drawdown(eq)
+        win_rate = (trade_wins / trade_count) if trade_count > 0 else np.nan
+        avg_exposure = (exposure_acc / exposure_n) if exposure_n > 0 else 0.0
+
+        out["windows"][w_name] = {
+            "return_pct": round(ret * 100.0, 2),
+            "max_drawdown_pct": round(mdd * 100.0, 2),
+            "trades": int(trade_count),
+            "win_rate_pct": (round(win_rate * 100.0, 1) if np.isfinite(win_rate) else None),
+            "avg_invested_pct": round(avg_exposure * 100.0, 1),
+        }
+
+        # Benchmark stats
+        if bench_ind is not None and (not bench_ind.empty) and ("Date" in bench_ind.columns) and ("Price" in bench_ind.columns):
+            b = bench_ind[["Date", "Price"]].dropna().sort_values("Date")
+            b = b.drop_duplicates("Date").set_index("Date")
+            b = b.loc[(b.index >= dates[0]) & (b.index <= dates[-1])]
+            if len(b) > 5:
+                bret = b["Price"].iloc[-1] / b["Price"].iloc[0] - 1.0
+                bmdd = _max_drawdown(b["Price"])
+                bench_stats[w_name] = {
+                    "return_pct": round(bret * 100.0, 2),
+                    "max_drawdown_pct": round(bmdd * 100.0, 2),
+                }
+
+    out["benchmark"] = bench_stats
+    return out
+
+
+def render_backtest_block(bt: dict, bench_symbol: str = "") -> str:
+    if not bt or not bt.get("windows"):
+        return ""
+    rows = ""
+    for w, s in bt.get("windows", {}).items():
+        b = (bt.get("benchmark", {}) or {}).get(w, {})
+        btxt = ""
+        if b:
+            btxt = f"<div class='muted' style='font-size:12px'>Benchmark ({bench_symbol}): {b.get('return_pct','')}% return, {b.get('max_drawdown_pct','')}% maxDD</div>"
+        rows += f"""<tr>
+            <td class='mono'>{w}</td>
+            <td class='mono'>{s.get('return_pct','')}%</td>
+            <td class='mono'>{s.get('max_drawdown_pct','')}%</td>
+            <td class='mono'>{s.get('trades','')}</td>
+            <td class='mono'>{'' if s.get('win_rate_pct') is None else str(s.get('win_rate_pct'))+'%'}</td>
+            <td class='mono'>{s.get('avg_invested_pct','')}%</td>
+        </tr>""" + f"<tr><td colspan='6' style='padding-top:0;border-top:none'>{btxt}</td></tr>"
+    return f"""<div class='card' style='margin-top:10px'>
+        <div style='display:flex;justify-content:space-between;align-items:baseline;gap:10px'>
+            <div style='font-weight:700'>Backtest (Investor Variant 2)</div>
+            <div class='muted' style='font-size:12px'>Start cash → enter on BUY/DCA Dip/DCA Reclaim · exit on AVOID · trim on TRIM · next-open execution</div>
+        </div>
+        <div class='table-responsive' style='margin-top:10px'>
+        <table>
+            <thead><tr>
+                <th>Window</th><th>Return</th><th>Max DD</th><th>Trades</th><th>Win%</th><th>Avg Invested</th>
+            </tr></thead>
+            <tbody>{rows}</tbody>
+        </table>
+        </div>
+        <div class='muted' style='font-size:12px;margin-top:6px'>Note: excludes pattern-based upgrades to avoid lookahead bias; uses current signal rules on historical prices.</div>
+    </div>"""
+
+
 def _pivots(ind, window=PIVOT_WINDOW):
     v = ind.tail(PATTERN_LOOKBACK).reset_index(drop=True).copy()
     v["PH"] = (v["High"] == v["High"].rolling(window * 2 + 1, center=True).max()).fillna(False)
@@ -1333,28 +1666,40 @@ def comment_for_row(r: pd.Series):
 
     flags_html = (" • " + " • ".join(quick_flags)) if quick_flags else ""
 
+    sig_css = sig_raw.lower().replace("_", "-")
+
     summary = (
-        f"<b>{emoji} {sig_disp}:</b> {action}"
-        f"<br><span style='color:var(--text-muted)'>{stage} • {fundy_line}{flags_html}</span>"
+        f"<div class='c-action'>"
+        f"<span class='c-sig c-{sig_css}'>{emoji} {sig_disp}</span>"
+        f"<span class='c-act'>{action}</span>"
+        f"</div>"
+        f"<div class='c-meta'>{stage} · {fundy_line}{flags_html}</div>"
     )
 
+    # --- Playbook (tight + readable) ---
+    def pb(label: str, text: str) -> str:
+        return (
+            "<div class='pb-row'>"
+            f"<span class='pb-lbl'>{label}</span>"
+            f"<span class='pb-txt'>{text}</span>"
+            "</div>"
+        )
 
-    # --- Playbook bullets (short + directive) ---
-    bullets = []
+    rows = []
 
-    # One-line context (what matters most)
+    # Context (one line)
     ctx = []
     if np.isfinite(rsi):  ctx.append(f"RSI {rsi:.0f}")
     if np.isfinite(d200): ctx.append(f"vs200 {d200:+.1f}%")
     if np.isfinite(atrp): ctx.append(f"ATR {atrp:.1f}%/day")
     if np.isfinite(rs3m): ctx.append(f"RS(3m) {rs3m:+.1f}% vs mkt")
     if ctx:
-        bullets.append("<b>Context:</b> " + " • ".join(ctx))
+        rows.append(pb("Context", " · ".join(ctx)))
 
     if sig == "BUY":
-        bullets.append(f"<b>New:</b> Buy only after a close above <b>{f(buy_trigger)}</b> (breakout).")
-        bullets.append(f"<b>Add:</b> If it breaks out, add on the first pullback that respects 21EMA (~{f(ema21)}).")
-        bullets.append(f"<b>Risk:</b> Hard stop ~ <b>{f(buy_stop)}</b>. If it loses the breakout level and keeps sliding → cut.")
+        rows.append(pb("New", f"Enter only after a close > {f(buy_trigger)} (breakout)."))
+        rows.append(pb("Add", f"Add on first pullback that holds EMA21 (~{f(ema21)})."))
+        rows.append(pb("Risk", f"Cut if close < {f(buy_stop)} (failed breakout)."))
 
     elif sig in ("DCA_DIP", "DCA_RECLAIM"):
         if dca_mode == "AUTO":
@@ -1370,36 +1715,36 @@ def comment_for_row(r: pd.Series):
                 base_lo = np.nanmin([lo, d0lo]) if np.isfinite(d0lo) else lo
                 auto_stop = base_lo - (0.5 * atr if np.isfinite(atr) else 0.0)
 
-            bullets.append(f"<b>New:</b> Auto‑DCA starter only if it holds the reclaim (close > <b>{f(auto_mid)}</b>) and stays above 21EMA (~{f(ema21)}).")
-            bullets.append(f"<b>If it runs:</b> Don’t chase. Next add is the first pullback toward ~{f(ema21)}.")
-            bullets.append(f"<b>Risk:</b> Cut if close < <b>{f(auto_stop)}</b> (reclaim failed).")
+            rows.append(pb("New", f"Starter only if price reclaims > {f(auto_mid)} (Auto‑DCA midpoint)."))
+            rows.append(pb("Add", f"Next add is first pullback toward EMA21 (~{f(ema21)})."))
+            rows.append(pb("Risk", f"Cut if close < {f(auto_stop)} (reclaim failed)."))
 
         else:
             if sig == "DCA_RECLAIM":
-                bullets.append(f"<b>New:</b> Starter only after a reclaim close above 21EMA (~{f(ema21)}) while holding the 200DMA zone.")
-                bullets.append(f"<b>Add:</b> If it holds, add on the first pullback that respects 21EMA (~{f(ema21)}).")
-                bullets.append(f"<b>Risk:</b> Cut if close < <b>{f(dca_stop)}</b> (reclaim failed / 200DMA broke).")
+                rows.append(pb("New", f"Starter only after reclaim > EMA21 (~{f(ema21)}) while holding 200DMA."))
+                rows.append(pb("Add", f"Add on first pullback that respects EMA21 (~{f(ema21)})."))
+                rows.append(pb("Risk", f"Cut if close < {f(dca_stop)} (reclaim failed / 200DMA broke)."))
             else:
-                bullets.append(f"<b>New:</b> Starter in the 200DMA zone <b>{f(dca_low)}–{f(dca_high)}</b> (scale in).")
-                bullets.append(f"<b>If no dip:</b> Don’t chase. Next entry is a pullback toward 21EMA (~{f(ema21)}) or a clean breakout > <b>{f(buy_trigger)}</b>.")
-                bullets.append(f"<b>Risk:</b> Cut if close < <b>{f(dca_stop)}</b> (200DMA break).")
+                rows.append(pb("New", f"Starter buys in 200DMA zone {f(dca_low)}–{f(dca_high)} (scale in)."))
+                rows.append(pb("If no dip", f"Don’t chase. Wait for reclaim > EMA21 (~{f(ema21)}) or breakout > {f(buy_trigger)}."))
+                rows.append(pb("Risk", f"Cut if close < {f(dca_stop)} (200DMA break)."))
 
     elif sig == "HOLD":
-        bullets.append(f"<b>New:</b> Wait. Buy only on (1) pullback to ~{f(ema21)} or (2) breakout > <b>{f(buy_trigger)}</b>.")
-        bullets.append(f"<b>If owned:</b> Hold; trail risk under ~<b>{f(trail_stop)}</b>.")
+        rows.append(pb("New", f"Wait. Buy only on (1) pullback to ~{f(ema21)} or (2) breakout > {f(buy_trigger)}."))
+        rows.append(pb("If owned", f"Hold; trail risk under ~{f(trail_stop)}."))
 
     elif sig == "TRIM":
-        bullets.append("<b>If owned:</b> Trim 20–33% into strength; do NOT add here.")
-        bullets.append(f"<b>Risk:</b> Trail stop under ~<b>{f(trail_stop)}</b>; re‑add only after a pullback toward ~{f(ema21)}.")
+        rows.append(pb("If owned", "Trim 20–33% into strength; don’t add here."))
+        rows.append(pb("Risk", f"Trail stop under ~{f(trail_stop)}; re‑add only after pullback toward ~{f(ema21)}."))
 
     elif sig == "AVOID":
-        bullets.append("<b>New:</b> No buys while the trend is broken / below a falling 200DMA.")
-        bullets.append(f"<b>If owned:</b> Reduce risk. Re‑enter only after reclaiming 200DMA (~{f(sma200)}) and stabilising.")
+        rows.append(pb("New", "No buys while the trend is broken / 200DMA is failing."))
+        rows.append(pb("If owned", f"Reduce risk. Re‑enter only after reclaiming 200DMA (~{f(sma200)}) and stabilising."))
 
     else:
-        bullets.append(f"<b>Plan:</b> Alerts at breakout > <b>{f(buy_trigger)}</b> and dip near 200DMA (~{f(sma200)}).")
+        rows.append(pb("Plan", f"Set alerts: breakout > {f(buy_trigger)} and dip near 200DMA (~{f(sma200)})."))
 
-    playbook = "<br>".join([f"• {b}" for b in bullets])
+    playbook = "".join(rows)
     return summary, playbook
 
 
@@ -1407,23 +1752,102 @@ def comment_for_row(r: pd.Series):
 
 def mini_candle(ind, flag_info=None, pattern_lines=None):
     v = ind.tail(MINI_BARS).copy()
-    fig = go.Figure(data=[go.Candlestick(x=v["Date"], open=v["Open"], high=v["High"], low=v["Low"], close=v["Close"], increasing_line_color="#4ade80", decreasing_line_color="#f87171")])
+
+    fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=v["Date"],
+                open=v["Open"],
+                high=v["High"],
+                low=v["Low"],
+                close=v["Close"],
+                increasing_line_color="rgba(74,222,128,0.9)",
+                decreasing_line_color="rgba(248,113,113,0.9)",
+                increasing_fillcolor="rgba(74,222,128,0.35)",
+                decreasing_fillcolor="rgba(248,113,113,0.35)",
+                line=dict(width=1),
+            )
+        ]
+    )
+
+    # Clean overlays only (avoid clutter)
     if "EMA21" in v.columns:
-        fig.add_trace(go.Scatter(x=v["Date"], y=v["EMA21"], line=dict(color="rgba(56,189,248,0.8)", width=1)))
+        fig.add_trace(
+            go.Scatter(
+                x=v["Date"],
+                y=v["EMA21"],
+                mode="lines",
+                line=dict(color="rgba(56,189,248,0.85)", width=1),
+            )
+        )
     if "SMA200" in v.columns:
-        fig.add_trace(go.Scatter(x=v["Date"], y=v["SMA200"], line=dict(color="rgba(148,163,184,0.6)", width=1, dash="dot")))
-    if flag_info:
+        fig.add_trace(
+            go.Scatter(
+                x=v["Date"],
+                y=v["SMA200"],
+                mode="lines",
+                line=dict(color="rgba(148,163,184,0.55)", width=1),
+            )
+        )
+
+    # Optional: pattern overlays (OFF by default)
+    if CHART_SHOW_FLAG_CHANNEL and flag_info:
         t2 = ind.tail(flag_info["win"])
         x = np.arange(len(t2))
-        fig.add_trace(go.Scatter(x=t2["Date"], y=np.polyval(flag_info["hi"], x), line=dict(dash="dash", color="#a855f7")))
-        fig.add_trace(go.Scatter(x=t2["Date"], y=np.polyval(flag_info["lo"], x), line=dict(dash="dash", color="#a855f7")))
-    if pattern_lines:
-        for ln in pattern_lines:
-            if ln[0] == "h": fig.add_trace(go.Scatter(x=[ln[1], ln[2]], y=[ln[3], ln[3]], mode="lines", line=dict(color="#facc15", width=2, dash="dot")))
-            elif ln[0] == "seg": fig.add_trace(go.Scatter(x=[ln[1], ln[3]], y=[ln[2], ln[4]], mode="lines", line=dict(color="#facc15", width=2)))
-    fig.add_annotation(xref="paper", yref="paper", x=0.01, y=0.02, text="Cyan=EMA21 • Grey=200DMA • Yellow=Pattern • Purple=Flag", showarrow=False, font=dict(size=9, color="#94a3b8"), align="left")
-    fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=130, width=280, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
-    return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={"displayModeBar": False, "staticPlot": True})
+        fig.add_trace(
+            go.Scatter(
+                x=t2["Date"],
+                y=np.polyval(flag_info["hi"], x),
+                mode="lines",
+                line=dict(dash="dash", color="rgba(168,85,247,0.55)", width=1),
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=t2["Date"],
+                y=np.polyval(flag_info["lo"], x),
+                mode="lines",
+                line=dict(dash="dash", color="rgba(168,85,247,0.55)", width=1),
+            )
+        )
+
+    if CHART_SHOW_PATTERN_LINES and pattern_lines:
+        for ln in pattern_lines[-2:]:
+            if ln[0] == "h":
+                fig.add_trace(
+                    go.Scatter(
+                        x=[ln[1], ln[2]],
+                        y=[ln[3], ln[3]],
+                        mode="lines",
+                        line=dict(color="rgba(148,163,184,0.35)", width=1, dash="dash"),
+                    )
+                )
+            elif ln[0] == "seg":
+                fig.add_trace(
+                    go.Scatter(
+                        x=[ln[1], ln[3]],
+                        y=[ln[2], ln[4]],
+                        mode="lines",
+                        line=dict(color="rgba(148,163,184,0.35)", width=1, dash="dash"),
+                    )
+                )
+
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=145,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
+    )
+    fig.update_xaxes(showgrid=False, showticklabels=False, zeroline=False)
+    fig.update_yaxes(showgrid=False, showticklabels=False, zeroline=False)
+
+    return pio.to_html(
+        fig,
+        include_plotlyjs=False,
+        full_html=False,
+        config={"displayModeBar": False, "staticPlot": True},
+    )
 
 def mini_spark(ind):
     v = ind.tail(SPARK_DAYS)
@@ -1500,6 +1924,38 @@ def fetch_benchmark(m_code: str, m_conf: dict):
     return {"symbol": None, "ind": None, "uptrend": True, "asof": None}
 
 
+
+def add_market_regime(ind: pd.DataFrame, bench_ind: pd.DataFrame) -> pd.DataFrame:
+    """Adds Market_Uptrend to a stock dataframe based on benchmark regime.
+
+    Market_Uptrend = benchmark Price > benchmark SMA200 AND benchmark SMA200 slope > 0.
+    We merge by Date. If benchmark isn't available, we default to True (don't block signals).
+    """
+    if (not ENABLE_MARKET_REGIME_FILTER) or bench_ind is None or ind is None or ind.empty:
+        # Keep column for downstream logic consistency
+        if ind is not None and ("Market_Uptrend" not in ind.columns):
+            ind = ind.copy()
+            ind["Market_Uptrend"] = True
+        return ind
+
+    try:
+        a = ind[["Date"]].copy()
+        b = bench_ind[["Date", "Price", "SMA200", "SMA200_Slope_%"]].copy().rename(
+            columns={"Price": "BenchPrice", "SMA200": "BenchSMA200", "SMA200_Slope_%": "BenchSMA200_Slope_%"}
+        )
+        m = a.merge(b, on="Date", how="left").sort_values("Date")
+        up = (m["BenchPrice"] > m["BenchSMA200"]) & (m["BenchSMA200_Slope_%"] > 0)
+        ind2 = ind.copy()
+        ind2 = ind2.merge(m[["Date"]].assign(Market_Uptrend=up.fillna(True).astype(bool)), on="Date", how="left")
+        ind2["Market_Uptrend"] = ind2["Market_Uptrend"].fillna(True).astype(bool)
+        return ind2
+    except Exception:
+        ind2 = ind.copy()
+        ind2["Market_Uptrend"] = True
+        return ind2
+
+
+
 def add_relative_strength(ind: pd.DataFrame, bench_ind: pd.DataFrame) -> pd.DataFrame:
     """Adds simple relative strength fields to a stock dataframe.
 
@@ -1538,6 +1994,8 @@ def process_market(m_code, m_conf):
     print(f"--> Analyzing {m_conf['name']}...")
     snaps = []
     frames = []
+    ind_map = {}  # for backtest
+    score_map = {}
 
     news_df = parse_announcements(m_code)
 
@@ -1572,10 +2030,14 @@ def process_market(m_code, m_conf):
 
         # Indicators (daily bars only)
         ind = indicators(df)
+        ind = add_market_regime(ind, bench_ind)
         ind = add_relative_strength(ind, bench_ind)
         ind = ind.dropna(subset=["High20", "RSI14", "EMA21", "Vol20", "ATR14", "SMA200", "SMA50", "Price"])
         if ind.empty:
             continue
+        if ENABLE_BACKTEST_REPORT:
+            ind_map[t_key] = ind.copy()
+            score_map[t_key] = float(fundy.get("score", 0.0))
 
         last = ind.iloc[-1]
         sig = label_row(last)
@@ -1775,6 +2237,16 @@ def process_market(m_code, m_conf):
             "_ind": ind,
         })
 
+    
+    # --- Backtest (Investor Variant 2) ---
+    if ENABLE_BACKTEST_REPORT and ind_map:
+        try:
+            m_conf["_backtest"] = backtest_investor_variant2(ind_map, score_map, bench_ind)
+        except Exception:
+            m_conf["_backtest"] = None
+    else:
+        m_conf["_backtest"] = None
+
     snaps_df = pd.DataFrame(snaps)
 
     if not snaps_df.empty:
@@ -1804,23 +2276,42 @@ def process_market(m_code, m_conf):
                         rows.append((int(h), float(mret), float(hit)))
 
                 if rows:
+                    # Past results → plain-English 'History' line (investor-friendly)
+                    horizon_order = [20, 60, 5]
+                    by_h = {int(h): (float(med), float(hit)) for h, med, hit in rows}
+
+                    def fmt_one(h):
+                        med, hit = by_h[h]
+                        hl = hlabel(h)
+                        return f"{hl}: typical {med:+.1f}%, higher {hit:.0f}%"
+
+                    chosen = [h for h in horizon_order if h in by_h][:2]
+                    details = " · ".join(fmt_one(h) for h in chosen) if chosen else ""
+
+                    edge_h = 20 if 20 in by_h else (chosen[0] if chosen else None)
+                    edge_txt = ""
+                    if edge_h is not None:
+                        med, hit = by_h[edge_h]
+                        if hit >= 60 and med > 0:
+                            edge_txt = "Supportive history"
+                        elif hit <= 45 and med < 0:
+                            edge_txt = "Weak history"
+                        else:
+                            edge_txt = "No clear edge"
+
                     n_txt = f" (n={int(n)})" if isinstance(n, (int, np.integer)) else ""
-
-                    def hlabel(h: int) -> str:
-                        return {5: "~1 week", 20: "~1 month", 60: "~3 months"}.get(h, f"{h}d")
-
-                    sig_disp = {
+                    s_disp = {
                         "BUY": "BUY",
                         "TRIM": "TRIM",
                         "DCA_DIP": "DCA Dip",
                         "DCA_RECLAIM": "DCA Reclaim",
                     }.get(s, s)
 
-                    parts = [f"{hlabel(h)}: typical <b>{med:+.1f}%</b> (up <b>{hit:.0f}%</b>)" for h, med, hit in rows]
                     playbook += (
-                        f"<br>• <b>Past results ({sig_disp}){n_txt}:</b> "
-                        + " • ".join(parts)
-                        + " <span style='color:var(--text-muted)'>typical=median move; up%=chance price is higher.</span>"
+                        "<div class='pb-row'>"
+                        "<span class='pb-lbl'>History</span>"
+                        f"<span class='pb-txt'>{edge_txt}{n_txt} — {s_disp}. {details}.</span>"
+                        "</div>"
                     )
 
             # News (AUS only) — surface inside the comment so the card gets the 'News' tag
@@ -1828,8 +2319,8 @@ def process_market(m_code, m_conf):
                 nd = news_df[(news_df["Ticker"] == r["Ticker"]) & (news_df["Recent"])]
                 if not nd.empty:
                     headline = str(nd.iloc[-1]["Headline"])
-                    summary += f" • News: {headline}"
-                    playbook += f"<br>• <b>News:</b> {headline}"
+                    summary += f" <span class='c-news'>News: {headline}</span>"
+                    playbook += f"<div class='pb-row'><span class='pb-lbl'>News</span><span class='pb-txt'>{headline}</span></div>"
 
             comments.append(summary)
             playbooks.append(playbook)
@@ -1879,7 +2370,32 @@ body { background: var(--bg); background-image: radial-gradient(at 0% 0%, rgba(5
 .metric { display: flex; flex-direction: column; }
 .metric label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
 .metric span { font-size: 13px; font-weight: 500; }
-.comment-box { font-size: 13px; line-height: 1.5; color: #cbd5e1; margin-bottom: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+.comment-box { font-size: 13px; line-height: 1.5; color: #cbd5e1; margin-bottom: 12px; padding-top: 8px; border-top: 1px solid var(--border); }/* --- Cleaner commentary --- */
+.c-action { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.c-sig { padding:3px 8px; border-radius:999px; font-weight:700; font-size:12px; letter-spacing:0.02em; color:white;
+         background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.12); }
+.c-sig.c-buy { background: rgba(34,197,94,0.18); border-color: rgba(34,197,94,0.30); }
+.c-sig.c-dca-dip, .c-sig.c-dca-reclaim, .c-sig.c-dca { background: rgba(245,158,11,0.18); border-color: rgba(245,158,11,0.30); }
+.c-sig.c-hold { background: rgba(59,130,246,0.18); border-color: rgba(59,130,246,0.30); }
+.c-sig.c-trim { background: rgba(168,85,247,0.18); border-color: rgba(168,85,247,0.30); }
+.c-sig.c-avoid { background: rgba(239,68,68,0.18); border-color: rgba(239,68,68,0.30); }
+.c-sig.c-watch { background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.12); }
+.c-act { font-size:14px; line-height:1.35; color: rgba(255,255,255,0.92); }
+.c-meta { margin-top:6px; font-size:12.5px; color: var(--text-muted); line-height:1.3; }
+.c-news { margin-left:10px; padding:2px 6px; border-radius:8px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10); }
+
+.playbook { margin-top: 10px; }
+.pb-row { display:flex; gap:10px; align-items:flex-start; padding:6px 0; border-top: 1px solid rgba(255,255,255,0.06); }
+.pb-row:first-child { border-top: none; padding-top:0; }
+.pb-lbl { flex: 0 0 auto; min-width: 64px; font-size:12px; font-weight:700; letter-spacing:0.02em;
+          color: rgba(255,255,255,0.75); }
+.pb-txt { font-size:13.5px; line-height:1.35; color: rgba(255,255,255,0.90); }
+
+.chart-container { margin-top: 10px; }
+.chart-key { display:flex; gap:10px; align-items:center; margin-top:6px; font-size:12px; color: var(--text-muted); }
+.sw { width:10px; height:10px; border-radius:3px; display:inline-block; margin-right:6px; border: 1px solid rgba(255,255,255,0.12); }
+.sw-ema { background: rgba(56,189,248,0.85); }
+.sw-200 { background: rgba(148,163,184,0.55); }
 .playbook { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; color: #e2e8f0; line-height: 1.6; }
 .playbook b { color: white; }
 .badge { padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; display: inline-block; }
@@ -1957,6 +2473,10 @@ def render_card(r, badge_type, curr):
     euphoria_cls = "euphoria-glow" if is_euphoria(r) else ""
     euphoria_tag = '<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;margin-left:6px">Euphoria</span>' if is_euphoria(r) else ""
     news_tag = '<span class="badge news" style="margin-left:6px">News</span>' if "News:" in (r['Comment'] or "") else ""
+    chart_key = ""
+    if CHART_KEY_IN_CARD:
+        chart_key = (
+            "<div class=\"chart-key\">" "<span class=\"sw sw-ema\"></span>EMA21" "<span class=\"sw sw-200\"></span>200DMA" "</div>")
     
     score = r['Fundy_Score']
     cat = r['Category']
@@ -2001,10 +2521,9 @@ def render_card(r, badge_type, curr):
         </div>
         <div class="comment-box">{r['Comment']}</div>
         <div class="playbook">{r['Playbook']}</div>
-        <div class="chart-container">{r['_mini_candle']}</div>
+        <div class="chart-container">{r['_mini_candle']}{chart_key}</div>
     </div>
     """
-
 def render_kpi(label, val, color_cls):
     return f"""<div class="kpi-card"><div class="kpi-lbl">{label}</div><div class="kpi-val {color_cls}">{val}</div></div>"""
 
@@ -2078,6 +2597,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     bench = m_conf.get("_bench", {}) or {}
     bench_sym = str(bench.get("symbol", "") or "")
     bench_up  = bool(bench.get("uptrend", True))
+    bt_html = render_backtest_block(m_conf.get("_backtest"), bench_sym)
     # Market regime is used in logic, but we keep the UI clean (no benchmark banner).
     bench_line = ""
 
@@ -2098,6 +2618,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
             <h1 id="{m_code}-top" style="margin-bottom:20px">{m_conf['name']}</h1>
             {bench_line}
             {kpi_html}
+            {bt_html}
             {html_cards}
             
             <h2 id="{m_code}-degen" style="margin-top:40px">Degenerate Radar (Spec Only)</h2>
