@@ -798,10 +798,23 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     x = df.copy().sort_values("Date").reset_index(drop=True)
 
+    # Defensive: yfinance can occasionally return MultiIndex or duplicate columns.
+    # If duplicates exist, pandas can return a DataFrame when selecting a "single" column (e.g. AdjClose),
+    # which breaks pd.to_numeric(). We keep the first occurrence.
+    if isinstance(x.columns, pd.MultiIndex):
+        x.columns = x.columns.get_level_values(0)
+    if hasattr(x.columns, 'duplicated') and x.columns.duplicated().any():
+        x = x.loc[:, ~x.columns.duplicated()]
+
     # --- Price series for indicator calculations ---
     if USE_ADJUSTED_FOR_INDICATORS and ("AdjClose" in x.columns):
         # AdjClose is typically aligned to last close (factor ~1 on the latest bar)
-        x["Price"] = pd.to_numeric(x["AdjClose"], errors="coerce")
+        adj = x["AdjClose"]
+        # Pandas returns a DataFrame if there are duplicate 'AdjClose' columns
+        # (or a MultiIndex selection). Take the first column defensively.
+        if isinstance(adj, pd.DataFrame):
+            adj = adj.iloc[:, 0]
+        x["Price"] = pd.to_numeric(adj, errors="coerce")
         # Approximate adjusted OHLC using the same adjustment factor as close
         with np.errstate(divide="ignore", invalid="ignore"):
             adj_factor = x["Price"] / pd.to_numeric(x["Close"], errors="coerce")
