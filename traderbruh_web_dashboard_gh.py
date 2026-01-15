@@ -1854,7 +1854,7 @@ def comment_for_row(r: pd.Series):
         action = f"Alerts: breakout > {f(buy_trigger)} • Dip zone ~ 200DMA ({f(sma200)})"
 
     # --- Fundamental line (short) ---
-    verified = bool(fund.get("verified", True))
+    verified = bool(fundy.get("verified", True))
     if not verified:
         # Do not penalize signal — just flag fundamentals as unverified/stale
         fundy_line = f"{cat} • Fundamentals unverified"
