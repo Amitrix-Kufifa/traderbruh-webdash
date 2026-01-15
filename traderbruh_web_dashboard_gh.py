@@ -1,6 +1,6 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 8.0.3 (Institutional robustness: Wilder ATR/RSI, fundamentals cache + unverified fallback, vol-adaptive patterns, ATR-risk backtest sizing, parallel price fetch)
+# Version: Ultimate 8.0.1 (Institutional robustness: Wilder ATR/RSI, fundamentals cache + unverified fallback, vol-adaptive patterns, ATR-risk backtest sizing, parallel price fetch)
 # - Fixed breakout logic (20D/52W highs shifted to avoid self-referencing)
 # - Added HOLD + TRIM signals (explicit hodl / take-profit guidance)
 # - Optional split/dividend-adjusted indicator series (AdjClose) for cleaner long lookbacks
@@ -493,6 +493,21 @@ MARKETS = {
 
 # ---------------- Robust Data Fetcher ----------------
 
+
+SECTOR_MAPS = {
+    "USA": {
+        "Technology": "XLK", "Financials": "XLF", "Healthcare": "XLV", 
+        "Consumer Cyclical": "XLY", "Consumer Defensive": "XLP", "Energy": "XLE", 
+        "Industrials": "XLI", "Utilities": "XLU", "Basic Materials": "XLB", 
+        "Real Estate": "XLRE", "Communication Services": "XLC"
+    },
+    "AUS": {
+        "Financial Services": "OZF.AX", "Basic Materials": "QRE.AX", "Energy": "^AXEJ",
+        "Healthcare": "^AXHJ", "Real Estate": "SLF.AX", "Industrials": "^AXID",
+        "Technology": "ATEC.AX", "Consumer Cyclical": "^AXDJ", "Consumer Defensive": "^AXSJ"
+    }
+}
+
 def fetch_prices(symbol: str, tz_name: str) -> pd.DataFrame:
     try:
         df = yf.download(symbol, period=f"{FETCH_DAYS}d", interval="1d", auto_adjust=False, progress=False, group_by="column", prepost=False)
@@ -557,32 +572,28 @@ def fetch_prices(symbol: str, tz_name: str) -> pd.DataFrame:
 
 # ---------------- NEW: Dynamic Fundamental Engine (Refined V6.2) ----------------
 
+
 def fetch_dynamic_fundamentals(symbol: str, category: str):
     """
-    Evaluates companies based on:
-    1. Core : Buffett/Piotroski-style quality (ROE, margins, balance sheet, cash conversion)
-    2. Growth: Rule of 40 + Mohanram-style intangibles + survival buffer (runway)
-    3. Spec : Runway, lifestyle vs work, cash floor (survival)
+    Evaluates companies based on Core/Growth/Spec metrics.
+    Robustness: Caching + Fallback + Unverified state.
     """
-    # --- Cache (avoid yfinance SPOF) ---
+    # --- Cache Check ---
     if ENABLE_FUNDAMENTALS_CACHE:
         cached, age = _get_cached_fund(symbol, category)
         if cached is not None and age is not None and age <= float(FUNDAMENTALS_CACHE_TTL_DAYS):
             out = dict(cached)
-            out["verified"] = bool(out.get("verified", True))
+            out["verified"] = True
             out["source"] = "cache"
-            out["cache_age_days"] = float(age)
+            out["cache_age_days"] = round(float(age), 1)
             return out
-
 
     try:
         tick = yf.Ticker(symbol)
-        # --- Safely get info dict ---
         try: info = tick.info
         except Exception: info = {}
         if not isinstance(info, dict): info = {}
 
-        # --- Safely get statements ---
         try: bs, is_, cf = tick.balance_sheet, tick.income_stmt, tick.cashflow
         except Exception: bs, is_, cf = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
@@ -597,244 +608,100 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
                     except Exception: return default
             return default
 
-        # --- Parse profit margin & debt/equity once ---
-        raw_profit_margin = info.get("profitMargins") or 0.0
-        try: profit_margin = float(raw_profit_margin)
-        except Exception: profit_margin = 0.0
-
-        raw_debt_eq = info.get("debtToEquity") or 0.0
-        try: debt_to_equity_val = float(raw_debt_eq)
-        except Exception: debt_to_equity_val = 0.0
+        profit_margin = float(info.get("profitMargins") or 0.0)
+        debt_to_equity_val = float(info.get("debtToEquity") or 0.0)
 
         score = 0.0
         tier = "Neutral"
         key_metric_str = ""
 
-        # --- Common datapoints ---
-        cash    = get_item(bs, ["Cash And Cash Equivalents", "Cash And Cash Equivalents And Short Term Investments", "Cash Financial"])
+        cash    = get_item(bs, ["Cash And Cash Equivalents", "Cash Financial"])
         lt_debt = get_item(bs, ["Long Term Debt", "Total Long Term Debt"])
         assets  = get_item(bs, ["Total Assets"])
-        tot_rev = get_item(is_, ["Total Revenue", "Operating Revenue"])
-        net_inc = get_item(is_, ["Net Income", "Net Income Common Stockholders"])
-        ebitda  = get_item(is_, ["EBITDA", "Normalized EBITDA"])
-        ocf     = get_item(cf, ["Operating Cash Flow", "Total Cash From Operating Activities"])
-        fcf     = get_item(cf, [\"Free Cash Flow\", \"Free Cashflow\"]) if cf is not None else 0.0
-        equity  = get_item(bs, ["Stockholders Equity", "Total Equity Gross Minority Interest"])
+        tot_rev = get_item(is_, ["Total Revenue"])
+        net_inc = get_item(is_, ["Net Income"])
+        ebitda  = get_item(is_, ["EBITDA"])
+        ocf     = get_item(cf, ["Operating Cash Flow"])
+        equity  = get_item(bs, ["Stockholders Equity"])
+        fcf     = get_item(cf, ["Free Cash Flow"])
 
-        # --- Burn / runway shared by Growth & Spec ---
         burn_annual = 0.0
         runway_months = None
         if (ocf < 0) or (net_inc < 0):
-            if (ocf < 0) and (net_inc < 0): base_loss = min(ocf, net_inc)
-            elif ocf < 0: base_loss = ocf
-            else: base_loss = net_inc
+            base_loss = min(ocf, net_inc) if (ocf < 0 and net_inc < 0) else (ocf if ocf < 0 else net_inc)
             burn_annual = abs(base_loss)
-            if burn_annual > 0 and cash > 0:
-                runway_months = cash / (burn_annual / 12.0)
+            if burn_annual > 0 and cash > 0: runway_months = cash / (burn_annual / 12.0)
 
-        # =================== MODE 1: CORE (BUFFETT / VALUE) ===================
         if category == "Core":
-            # 1) ROE (weight ~3)
             if equity > 0:
                 roe = net_inc / equity
                 if roe > 0.15: score += 3
                 elif roe > 0.10: score += 1.5
             else: roe = 0.0
-
-            # 2) Profit margins (weight ~2)
-            marg = profit_margin
-            if marg > 0.15: score += 2
-            elif marg > 0.08: score += 1
-
-            # 3) Balance sheet: debt vs cash (weight ~3)
-            debt_eq = debt_to_equity_val
-            if debt_eq > 50: debt_eq = debt_eq / 100.0
-
-            if cash > lt_debt and lt_debt > 0: score += 3
-            elif debt_eq < 0.5: score += 2
-            elif debt_eq < 1.0: score += 1
-
-            # 4) Earnings quality (weight ~2)
+            if profit_margin > 0.15: score += 2
+            elif profit_margin > 0.08: score += 1
+            if cash > lt_debt > 0: score += 3
+            elif debt_to_equity_val < 50: score += 2
             if ocf > net_inc > 0: score += 2
-
             tier = "Fortress" if score >= 7 else ("Stable" if score >= 4 else "Weak")
             key_metric_str = f"ROE: {roe*100:.1f}%"
 
-        # =================== MODE 2: GROWTH (VC / MOHANRAM) ===================
         elif category == "Growth":
-            # 1) Rule of 40 (weight ~4)
-            rev_prev = get_item(is_, ["Total Revenue", "Operating Revenue"], idx=1)
+            rev_prev = get_item(is_, ["Total Revenue"], idx=1)
             rev_growth = ((tot_rev - rev_prev) / rev_prev) * 100.0 if rev_prev > 0 else 0.0
             ebitda_marg = (ebitda / tot_rev) * 100.0 if tot_rev > 0 else 0.0
             rule_40 = rev_growth + ebitda_marg
-
-            if rule_40 > 50: score += 4
-            elif rule_40 > 40: score += 3
-            elif rule_40 > 20: score += 1
-
-            # 2) Mohanram-style intangibles: R&D intensity (weight ~2)
-            rnd = get_item(is_, ["Research And Development"])
-            sga = get_item(is_, ["Selling General And Administration", "General And Administrative Expense"])
-            rnd_intensity = (rnd / assets) if assets > 0 else 0.0
-            if rnd_intensity > 0.10: score += 2
-            elif rnd_intensity > 0.05: score += 1
-
-            # 3) Earnings quality: CFO > Net Income (weight ~1)
-            if ocf > net_inc and ocf > 0: score += 1
-
-            # 4) "Magic Number" proxy: rev added per $ of SGA (weight ~2)
-            if sga > 0:
-                efficiency = (tot_rev - rev_prev) / sga
-                if efficiency > 1.0: score += 2
-                elif efficiency > 0.7: score += 1
-
-            # 5) Gross margin scalability (weight ~2)
-            gp = get_item(is_, ["Gross Profit"])
-            gm = gp / tot_rev if tot_rev > 0 else 0.0
-            if gm > 0.60: score += 2
-            elif gm > 0.40: score += 1
-
-            # 6) Survival buffer: runway (penalty/bonus)
+            if rule_40 > 40: score += 4
+            elif rule_40 > 20: score += 2
+            if ocf > net_inc and ocf > 0: score += 2
             if runway_months is not None:
-                if runway_months < 6: score -= 2
+                if runway_months > 24: score += 2
                 elif runway_months < 12: score -= 1
-                elif runway_months > 24: score += 1
-
             tier = "Hyper-Growth" if score >= 7 else ("Scalable" if score >= 4 else "Burner")
             key_metric_str = f"Rule40: {rule_40:.0f}"
 
-        # =================== MODE 3: SPEC (SURVIVAL / LIFESTYLE) ===================
-        else:  # Spec
-            # 1) Runway (weight ~4)
-            if runway_months is not None or burn_annual > 0:
-                rm = runway_months if runway_months is not None else 0.0
-                if rm > 18: score += 4
-                elif rm > 12: score += 3
-                elif rm > 6: score += 1
-                else: score -= 2  # imminent death
-
-            # 2) Lifestyle vs work (weight ~3)
-            sga = get_item(is_, ["Selling General And Administration", "General And Administrative Expense"])
-            rnd = get_item(is_, ["Research And Development"])
-            capex = abs(get_item(cf, ["Capital Expenditure", "Purchase Of PPE"]))
-            work_spend = max(rnd, capex)
-
-            if work_spend == 0 and sga == 0: pass
-            elif work_spend > sga * 1.5: score += 3
-            elif work_spend > sga: score += 2
-            elif sga > work_spend * 2: score -= 2  # lifestyle company
-
-            # 3) Cash floor (weight ~3)
-            if cash > 20_000_000: score += 3
-            elif cash > 5_000_000: score += 1
-
-            # Key metric for card/table
+        else: # Spec
             if runway_months is not None:
-                rm = runway_months
-                runway_str = f"{rm:.1f}m" if rm < 120 else ">10yr"
-            else: runway_str = "n/a"
-
+                if runway_months > 18: score += 5
+                elif runway_months > 12: score += 3
+                elif runway_months < 6: score -= 2
+            if cash > 10_000_000: score += 3
             tier = "Funded" if score >= 7 else ("Alive" if score >= 4 else "Zombie")
-            key_metric_str = f"Runway: {runway_str}"
-            if tot_rev < 1_000_000:
-                key_metric_str = f"Cash: {cash/1e6:.1f}M / {runway_str}"
+            key_metric_str = f"Runway: {runway_months:.1f}m" if runway_months else "n/a"
 
-        # Clamp and return
         score = max(0.0, min(10.0, score))
-        # --- Cache raw fundamentals inputs (so scoring logic can evolve without re-scraping) ---
-        def _sf(x):
-            try:
-                if x is None:
-                    return None
-                if isinstance(x, (np.floating, np.integer)):
-                    return float(x)
-                if isinstance(x, (int, float)):
-                    return float(x)
-                return float(x)
-            except Exception:
-                return None
 
-        raw = {
-            "info": {
-                "sector": info.get("sector"),
-                "industry": info.get("industry"),
-                "marketCap": _sf(info.get("marketCap")),
-                "profitMargins": _sf(info.get("profitMargins")),
-                "debtToEquity": _sf(info.get("debtToEquity")),
-                "returnOnEquity": _sf(info.get("returnOnEquity")),
-                "returnOnAssets": _sf(info.get("returnOnAssets")),
-                "trailingPE": _sf(info.get("trailingPE")),
-                "forwardPE": _sf(info.get("forwardPE")),
-                "priceToBook": _sf(info.get("priceToBook")),
-            },
-            "balance_sheet": {
-                "totalCash": _sf(cash),
-                "totalDebt": _sf(lt_debt),
-                "totalStockholderEquity": _sf(equity),
-            },
-            "income_stmt": {
-                "totalRevenue": _sf(tot_rev),
-                "netIncome": _sf(net_inc),
-            },
-            "cashflow": {
-                "freeCashflow": _sf(fcf),
-                "operatingCashflow": _sf(ocf),
-                "burnAnnual": _sf(burn_annual),
-                "runwayMonths": _sf(runway_months or 0.0),
-            },
+        def _sf(x):
+            try: return float(x) if x is not None and np.isfinite(float(x)) else None
+            except: return None
+
+        raw_data = {
+            "info": {"sector": info.get("sector"), "industry": info.get("industry"), "marketCap": _sf(info.get("marketCap"))},
+            "balance_sheet": {"totalCash": _sf(cash), "totalDebt": _sf(lt_debt), "equity": _sf(equity)},
+            "income_stmt": {"revenue": _sf(tot_rev), "netIncome": _sf(net_inc)},
+            "cashflow": {"ocf": _sf(ocf), "fcf": _sf(fcf), "runway": _sf(runway_months)}
         }
 
-
-
         out = {
-                    "score": round(score, 1),
-                    "tier": tier,
-                    "category_mode": category,
-                    "key_metric": key_metric_str,
-                    "roe": net_inc / equity if equity > 0 else 0.0,
-                    "margin": profit_margin,
-                    "debteq": debt_to_equity_val,
-                    "cash": cash,
-                    "runway_months": runway_months or 0.0,
-                    "burn_annual": burn_annual,
-                }
-        out["raw"] = raw
-        out["verified"] = True
-        out["source"] = "live"
+            "score": round(score, 1), "tier": tier, "category_mode": category, "key_metric": key_metric_str,
+            "roe": net_inc/equity if equity > 0 else 0.0, "margin": profit_margin, "debteq": debt_to_equity_val,
+            "cash": cash, "runway_months": runway_months or 0.0, "burn_annual": burn_annual,
+            "verified": True, "source": "live", "raw": raw_data, "sector": info.get("sector")
+        }
         _set_cached_fund(symbol, category, out)
         _save_fund_cache()
         return out
 
     except Exception:
-        # Fallback: if live fetch fails, use stale cache if available (up to FUNDAMENTALS_CACHE_STALE_OK_DAYS)
         if ENABLE_FUNDAMENTALS_CACHE:
             cached, age = _get_cached_fund(symbol, category)
-            if cached is not None and age is not None and age <= float(FUNDAMENTALS_CACHE_STALE_OK_DAYS):
+            if cached:
                 out = dict(cached)
                 out["source"] = "stale-cache"
-                out["cache_age_days"] = float(age)
-                # mark as unverified if beyond TTL
-                out["verified"] = bool(age <= float(FUNDAMENTALS_CACHE_TTL_DAYS))
+                out["verified"] = False
+                out["cache_age_days"] = round(float(age), 1)
                 return out
-
-        # No cache available — do not punish the technical signal; mark fundamentals as unverified
-        return {
-            "score": 0.0,
-            "tier": "Unverified",
-            "category_mode": str(category),
-            "key_metric": "-",
-            "roe": 0.0,
-            "gross": 0.0,
-            "oper": 0.0,
-            "debteq": 0.0,
-            "cash": 0.0,
-            "runway_months": 0.0,
-            "burn_annual": 0.0,
-            "verified": False,
-            "source": "none",
-        }
-
-
+        return {"score":0.0, "tier":"Unverified", "verified": False, "source":"none", "key_metric":"-"}
 def wilders_rma(series: pd.Series, period: int) -> pd.Series:
     """Wilder's RMA smoothing (institutional standard): alpha = 1/period."""
     try:
@@ -1857,11 +1724,18 @@ def comment_for_row(r: pd.Series):
     dca_high = sma200 * (1.0 + prox)        if np.isfinite(sma200) else np.nan
 
     # Stops (rule-of-thumb; NOT a guarantee)
-    atr_stop_mult  = float(RULES.get("risk", {}).get("atr_stop_mult", 2.0))
+    # atr_stop_mult defined adaptively
     atr_trail_mult = float(RULES.get("risk", {}).get("atr_trail_mult", 3.0))
     break200 = float(RULES.get("risk", {}).get("sma200_break_pct", 0.03))
 
+    
+    # Adaptive Stops (V8.1 Leadership logic)
+    atr_stop_mult = 2.0
+    if slope200 > 0.5: # Strong Weinstein Stage 2
+        atr_stop_mult = 3.0 # Give winners room
+    
     buy_stop = (buy_trigger - atr_stop_mult * atr) if (np.isfinite(buy_trigger) and np.isfinite(atr)) else np.nan
+
 
     dca_stop = np.nan
     if np.isfinite(dca_low):
@@ -2290,40 +2164,33 @@ def add_market_regime(ind: pd.DataFrame, bench_ind: pd.DataFrame) -> pd.DataFram
 
 
 
-def add_relative_strength(ind: pd.DataFrame, bench_ind: pd.DataFrame) -> pd.DataFrame:
-    """Adds simple relative strength fields to a stock dataframe.
 
-    We compute:
-    - RS_Line        = Price / BenchPrice
-    - RS_Slope20_%   = % change in RS_Line over RS_SLOPE_WINDOW
-    - RS_3M_%        = (stock 3M return - benchmark 3M return) in percentage points
-
-    If benchmark isn't available, we simply return the original dataframe.
-    """
-    if (not ENABLE_RELATIVE_STRENGTH) or bench_ind is None or ind is None or ind.empty:
-        return ind
-
-    try:
-        a = ind[["Date", "Price"]].copy()
-        b = bench_ind[["Date", "Price"]].copy().rename(columns={"Price": "BenchPrice"})
-        m = a.merge(b, on="Date", how="inner").sort_values("Date")
-        if m.empty:
-            return ind
-
-        rs_line = (m["Price"] / m["BenchPrice"]).replace([np.inf, -np.inf], np.nan)
-        m["RS_Line"] = rs_line
-
-        # RS slope (positive => improving leadership)
-        m["RS_Slope20_%"] = (rs_line.diff(RS_SLOPE_WINDOW) / rs_line.shift(RS_SLOPE_WINDOW)).replace([np.inf, -np.inf], np.nan) * 100.0
-
-        # Relative return (stock outperformance vs benchmark)
-        m["RS_3M_%"] = (m["Price"].pct_change(RS_LOOKBACK_BARS) - m["BenchPrice"].pct_change(RS_LOOKBACK_BARS)).replace([np.inf, -np.inf], np.nan) * 100.0
-
-        ind2 = ind.merge(m[["Date", "RS_Line", "RS_Slope20_%", "RS_3M_%"]], on="Date", how="left")
-        return ind2
-    except Exception:
-        return ind
-
+def add_relative_strength(ind: pd.DataFrame, bench_ind: pd.DataFrame, sector_ind: pd.DataFrame = None) -> pd.DataFrame:
+    """Adds RS vs Benchmark AND RS vs Sector."""
+    if ind is None or ind.empty: return ind
+    res = ind.copy()
+    
+    # 1. Bench RS
+    if bench_ind is not None and not bench_ind.empty:
+        try:
+            m = ind[["Date", "Price"]].merge(bench_ind[["Date", "Price"]].rename(columns={"Price":"BP"}), on="Date")
+            rs_line = (m["Price"] / m["BP"]).replace([np.inf, -np.inf], np.nan)
+            m["RS_Line"] = rs_line
+            m["RS_Slope20_%"] = (rs_line.diff(RS_SLOPE_WINDOW) / rs_line.shift(RS_SLOPE_WINDOW)) * 100.0
+            m["RS_3M_%"] = (m["Price"].pct_change(RS_LOOKBACK_BARS) - m["BP"].pct_change(RS_LOOKBACK_BARS)) * 100.0
+            res = res.merge(m[["Date", "RS_Line", "RS_Slope20_%", "RS_3M_%"]], on="Date", how="left")
+        except: pass
+        
+    # 2. Sector RS
+    if sector_ind is not None and not sector_ind.empty:
+        try:
+            m = ind[["Date", "Price"]].merge(sector_ind[["Date", "Price"]].rename(columns={"Price":"SP"}), on="Date")
+            s_rs_line = (m["Price"] / m["SP"]).replace([np.inf, -np.inf], np.nan)
+            m["RS_Sector_Line"] = s_rs_line
+            res = res.merge(m[["Date", "RS_Sector_Line"]], on="Date", how="left")
+        except: pass
+        
+    return res
 def process_market(m_code, m_conf):
     print(f"--> Analyzing {m_conf['name']}...")
     snaps = []
@@ -2491,31 +2358,26 @@ def process_market(m_code, m_conf):
         palign = "ALIGNED" if is_aligned else "CONFLICT"
 
         # --- Fundamental safety gates (prevents "trash BUY" on nice charts) ---
-        # IMPORTANT: only enforce these gates when fundamentals are VERIFIED.
-        # If fundamentals are unavailable/unverified (Yahoo hiccups), do NOT turn that into an AVOID signal.
-        if bool(fundy.get("verified", True)):
-            if t_cat == "Core" and float(fundy.get("score", 0.0)) < 4:
-                sig = "AVOID"
-            if t_cat == "Growth" and float(fundy.get("score", 0.0)) < 3:
-                sig = "AVOID"
-            if t_cat == "Spec" and float(fundy.get("score", 0.0)) < 3:
-                sig = "AVOID"
+        if t_cat == "Core" and fundy["score"] < 4:
+            sig = "AVOID"
+        if t_cat == "Growth" and fundy["score"] < 3:
+            sig = "AVOID"
+        if t_cat == "Spec" and fundy["score"] < 3:
+            sig = "AVOID"
 
 
         # --- DCA quality gate (avoid averaging into weak businesses) ---
         if str(sig).startswith("DCA"):
-            # Only apply DCA business-quality gate when fundamentals are VERIFIED.
-            if bool(fundy.get("verified", True)):
-                        min_shield = MIN_SHIELD_FOR_DCA_CORE if t_cat == "Core" else MIN_SHIELD_FOR_DCA_GROWTH
-                        if float(fundy.get("score", 0.0)) < float(min_shield):
-                            # Downgrade rather than 'AVOID': the chart may be tradable, but not a "DCA-quality" business.
-                            p_now = float(last.get("Price", last.get("Close", np.nan)))
-                            s200_now = float(last.get("SMA200", np.nan))
-                            if np.isfinite(p_now) and np.isfinite(s200_now) and (p_now > s200_now):
-                                sig = "HOLD"
-                            else:
-                                sig = "WATCH"
-                            sig_auto = False
+            min_shield = MIN_SHIELD_FOR_DCA_CORE if t_cat == "Core" else MIN_SHIELD_FOR_DCA_GROWTH
+            if float(fundy.get("score", 0.0)) < float(min_shield):
+                # Downgrade rather than 'AVOID': the chart may be tradable, but not a "DCA-quality" business.
+                p_now = float(last.get("Price", last.get("Close", np.nan)))
+                s200_now = float(last.get("SMA200", np.nan))
+                if np.isfinite(p_now) and np.isfinite(s200_now) and (p_now > s200_now):
+                    sig = "HOLD"
+                else:
+                    sig = "WATCH"
+                sig_auto = False
 
         # --- Optional litmus stats (forward returns after signals) ---
         litmus = {}
@@ -3039,7 +2901,17 @@ def render_card(r, badge_type, curr):
         s_badge = "spec-high" if score >= 7 else "shield-low"
         s_icon = "❤️"
 
-    fundy_html = f'<span class="badge {s_badge}" style="margin-left:6px">{s_icon} {score}/10 {r["Fundy_Tier"]}</span>'
+    
+    verified = bool(r.get("Fundy", {}).get("verified", True))
+    source = str(r.get("Fundy", {}).get("source", "live"))
+    age = r.get("Fundy", {}).get("cache_age_days", 0)
+    stale_tag = ""
+    if not verified or "cache" in source:
+        clr = "#94a3b8" if verified else "#ef4444"
+        stale_tag = f'<span class="badge" style="background:rgba(148,163,184,0.1);color:{clr};margin-left:6px;text-transform:none">Fundies: {age}d ago</span>'
+    
+    fundy_html = f'<span class="badge {s_badge}" style="margin-left:6px">{s_icon} {score}/10 {r["Fundy_Tier"]}</span>{stale_tag}'
+
 
     sig_txt = {
         "DCA_DIP": "DCA Dip",
@@ -3233,7 +3105,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v8.0.3")
+    print("Starting TraderBruh Global Hybrid v8.0.1")
     market_htmls, tab_buttons = [], []
     
     # Force Sydney Time
@@ -3247,7 +3119,7 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v8.0.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body class="mode-standard">
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v7.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body class="mode-standard">
     <div class="topbar">
         <div class="build-stamp">Built: {gen_time} · Copyright @Amitesh</div>
         <div class="mode-switch">
