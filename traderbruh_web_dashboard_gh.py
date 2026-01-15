@@ -1,6 +1,6 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 8.0.1 (Institutional robustness: Wilder ATR/RSI, fundamentals cache + unverified fallback, vol-adaptive patterns, ATR-risk backtest sizing, parallel price fetch)
+# Version: Ultimate 8.0.3 (Institutional robustness: Wilder ATR/RSI, fundamentals cache + unverified fallback, vol-adaptive patterns, ATR-risk backtest sizing, parallel price fetch)
 # - Fixed breakout logic (20D/52W highs shifted to avoid self-referencing)
 # - Added HOLD + TRIM signals (explicit hodl / take-profit guidance)
 # - Optional split/dividend-adjusted indicator series (AdjClose) for cleaner long lookbacks
@@ -618,6 +618,7 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
         net_inc = get_item(is_, ["Net Income", "Net Income Common Stockholders"])
         ebitda  = get_item(is_, ["EBITDA", "Normalized EBITDA"])
         ocf     = get_item(cf, ["Operating Cash Flow", "Total Cash From Operating Activities"])
+        fcf     = get_item(cf, [\"Free Cash Flow\", \"Free Cashflow\"]) if cf is not None else 0.0
         equity  = get_item(bs, ["Stockholders Equity", "Total Equity Gross Minority Interest"])
 
         # --- Burn / runway shared by Growth & Spec ---
@@ -768,7 +769,7 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
             },
             "balance_sheet": {
                 "totalCash": _sf(cash),
-                "totalDebt": _sf(debt),
+                "totalDebt": _sf(lt_debt),
                 "totalStockholderEquity": _sf(equity),
             },
             "income_stmt": {
@@ -776,8 +777,8 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
                 "netIncome": _sf(net_inc),
             },
             "cashflow": {
-                "freeCashflow": _sf(free_cf),
-                "operatingCashflow": _sf(op_cf),
+                "freeCashflow": _sf(fcf),
+                "operatingCashflow": _sf(ocf),
                 "burnAnnual": _sf(burn_annual),
                 "runwayMonths": _sf(runway_months or 0.0),
             },
@@ -2490,26 +2491,31 @@ def process_market(m_code, m_conf):
         palign = "ALIGNED" if is_aligned else "CONFLICT"
 
         # --- Fundamental safety gates (prevents "trash BUY" on nice charts) ---
-        if t_cat == "Core" and fundy["score"] < 4:
-            sig = "AVOID"
-        if t_cat == "Growth" and fundy["score"] < 3:
-            sig = "AVOID"
-        if t_cat == "Spec" and fundy["score"] < 3:
-            sig = "AVOID"
+        # IMPORTANT: only enforce these gates when fundamentals are VERIFIED.
+        # If fundamentals are unavailable/unverified (Yahoo hiccups), do NOT turn that into an AVOID signal.
+        if bool(fundy.get("verified", True)):
+            if t_cat == "Core" and float(fundy.get("score", 0.0)) < 4:
+                sig = "AVOID"
+            if t_cat == "Growth" and float(fundy.get("score", 0.0)) < 3:
+                sig = "AVOID"
+            if t_cat == "Spec" and float(fundy.get("score", 0.0)) < 3:
+                sig = "AVOID"
 
 
         # --- DCA quality gate (avoid averaging into weak businesses) ---
         if str(sig).startswith("DCA"):
-            min_shield = MIN_SHIELD_FOR_DCA_CORE if t_cat == "Core" else MIN_SHIELD_FOR_DCA_GROWTH
-            if float(fundy.get("score", 0.0)) < float(min_shield):
-                # Downgrade rather than 'AVOID': the chart may be tradable, but not a "DCA-quality" business.
-                p_now = float(last.get("Price", last.get("Close", np.nan)))
-                s200_now = float(last.get("SMA200", np.nan))
-                if np.isfinite(p_now) and np.isfinite(s200_now) and (p_now > s200_now):
-                    sig = "HOLD"
-                else:
-                    sig = "WATCH"
-                sig_auto = False
+            # Only apply DCA business-quality gate when fundamentals are VERIFIED.
+            if bool(fundy.get("verified", True)):
+                        min_shield = MIN_SHIELD_FOR_DCA_CORE if t_cat == "Core" else MIN_SHIELD_FOR_DCA_GROWTH
+                        if float(fundy.get("score", 0.0)) < float(min_shield):
+                            # Downgrade rather than 'AVOID': the chart may be tradable, but not a "DCA-quality" business.
+                            p_now = float(last.get("Price", last.get("Close", np.nan)))
+                            s200_now = float(last.get("SMA200", np.nan))
+                            if np.isfinite(p_now) and np.isfinite(s200_now) and (p_now > s200_now):
+                                sig = "HOLD"
+                            else:
+                                sig = "WATCH"
+                            sig_auto = False
 
         # --- Optional litmus stats (forward returns after signals) ---
         litmus = {}
@@ -3227,7 +3233,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v8.0.1")
+    print("Starting TraderBruh Global Hybrid v8.0.3")
     market_htmls, tab_buttons = [], []
     
     # Force Sydney Time
@@ -3241,7 +3247,7 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v7.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body class="mode-standard">
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v8.0.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body class="mode-standard">
     <div class="topbar">
         <div class="build-stamp">Built: {gen_time} · Copyright @Amitesh</div>
         <div class="mode-switch">
