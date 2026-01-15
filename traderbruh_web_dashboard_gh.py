@@ -1,6 +1,6 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 8.0.3 (Institutional robustness: Wilder ATR/RSI, fundamentals cache + unverified fallback, vol-adaptive patterns, ATR-risk backtest sizing, parallel price fetch)
+# Version: Ultimate 8.0 (Institutional robustness: Wilder ATR/RSI, fundamentals cache + unverified fallback, vol-adaptive patterns, ATR-risk backtest sizing, parallel price fetch)
 # - Fixed breakout logic (20D/52W highs shifted to avoid self-referencing)
 # - Added HOLD + TRIM signals (explicit hodl / take-profit guidance)
 # - Optional split/dividend-adjusted indicator series (AdjClose) for cleaner long lookbacks
@@ -82,8 +82,8 @@ BACKTEST_TRIM_FRACTION = 0.33              # when TRIM triggers, sell this fract
 BACKTEST_FEE_BPS = 10                      # 10 bps per trade side (rough friction estimate)
 
 # Backtest sizing upgrade (volatility / ATR targeting)
-BACKTEST_RISK_PCT = 0.01              # risk budget per new position (1% of equity)
-BACKTEST_STOP_ATR_MULT = 2.0           # assume an ATR-based stop distance
+BACKTEST_RISK_PCT = 0.005              # risk budget per new position (0.5% of equity)
+BACKTEST_STOP_ATR_MULT = 3.0           # assume an ATR-based stop distance
 BACKTEST_MAX_POS_VALUE_PCT = 0.20      # cap position notional (avoid concentration)
 BACKTEST_MIN_CASH_BUFFER_PCT = 0.01    # keep a small cash buffer
 
@@ -102,7 +102,7 @@ PRICE_FETCH_MAX_WORKERS = 6
 
 # --- Volatility-adaptive pattern tolerance ---
 # Instead of a fixed % tolerance, compare pivots using a fraction of recent ATR.
-SIMILAR_ATR_MULT = 0.5   # abs(a-b) <= SIMILAR_ATR_MULT * median_ATR
+SIMILAR_ATR_MULT = 0.6   # abs(a-b) <= SIMILAR_ATR_MULT * median_ATR
 
 # --- Internal caches (in-memory) ---
 _FUND_CACHE = None
@@ -618,7 +618,6 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
         net_inc = get_item(is_, ["Net Income", "Net Income Common Stockholders"])
         ebitda  = get_item(is_, ["EBITDA", "Normalized EBITDA"])
         ocf     = get_item(cf, ["Operating Cash Flow", "Total Cash From Operating Activities"])
-        fcf     = get_item(cf, ["Free Cash Flow", "Free Cashflow"]) if cf is not None else 0.0
         equity  = get_item(bs, ["Stockholders Equity", "Total Equity Gross Minority Interest"])
 
         # --- Burn / runway shared by Growth & Spec ---
@@ -741,50 +740,6 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
 
         # Clamp and return
         score = max(0.0, min(10.0, score))
-        # --- Cache raw fundamentals inputs (so scoring logic can evolve without re-scraping) ---
-        def _sf(x):
-            try:
-                if x is None:
-                    return None
-                if isinstance(x, (np.floating, np.integer)):
-                    return float(x)
-                if isinstance(x, (int, float)):
-                    return float(x)
-                return float(x)
-            except Exception:
-                return None
-
-        raw = {
-            "info": {
-                "sector": info.get("sector"),
-                "industry": info.get("industry"),
-                "marketCap": _sf(info.get("marketCap")),
-                "profitMargins": _sf(info.get("profitMargins")),
-                "debtToEquity": _sf(info.get("debtToEquity")),
-                "returnOnEquity": _sf(info.get("returnOnEquity")),
-                "returnOnAssets": _sf(info.get("returnOnAssets")),
-                "trailingPE": _sf(info.get("trailingPE")),
-                "forwardPE": _sf(info.get("forwardPE")),
-                "priceToBook": _sf(info.get("priceToBook")),
-            },
-            "balance_sheet": {
-                "totalCash": _sf(cash),
-                "totalDebt": _sf(lt_debt),
-                "totalStockholderEquity": _sf(equity),
-            },
-            "income_stmt": {
-                "totalRevenue": _sf(tot_rev),
-                "netIncome": _sf(net_inc),
-            },
-            "cashflow": {
-                "freeCashflow": _sf(fcf),
-                "operatingCashflow": _sf(ocf),
-                "burnAnnual": _sf(burn_annual),
-                "runwayMonths": _sf(runway_months or 0.0),
-            },
-        }
-
-
 
         out = {
                     "score": round(score, 1),
@@ -798,7 +753,6 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
                     "runway_months": runway_months or 0.0,
                     "burn_annual": burn_annual,
                 }
-        out["raw"] = raw
         out["verified"] = True
         out["source"] = "live"
         _set_cached_fund(symbol, category, out)
@@ -833,18 +787,6 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
             "verified": False,
             "source": "none",
         }
-
-
-def wilders_rma(series: pd.Series, period: int) -> pd.Series:
-    """Wilder's RMA smoothing (institutional standard): alpha = 1/period."""
-    try:
-        p = float(period)
-        if p <= 0:
-            return series
-    except Exception:
-        return series
-    return series.ewm(alpha=1.0/float(period), adjust=False).mean()
-
 def indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     Indicator stack used by the dashboard.
@@ -905,8 +847,8 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     chg = x["Price"].diff()
     up = chg.clip(lower=0)
     dn = (-chg).clip(lower=0)
-    avg_up = wilders_rma(up, 14)
-    avg_dn = wilders_rma(dn, 14)
+    avg_up = up.ewm(alpha=1/14, adjust=False).mean()
+    avg_dn = dn.ewm(alpha=1/14, adjust=False).mean()
     RS = avg_up / avg_dn.replace(0, np.nan)
     x["RSI14"] = 100 - (100 / (1 + RS))
     # --- Distances ---
@@ -920,7 +862,7 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     x["H-C"] = (x["HighI"] - x["Price"].shift(1)).abs()
     x["L-C"] = (x["LowI"]  - x["Price"].shift(1)).abs()
     x["TR"]  = x[["H-L", "H-C", "L-C"]].max(axis=1)
-    x["ATR14"]   = wilders_rma(x["TR"], 14)  # Wilder RMA
+    x["ATR14"]   = x["TR"].ewm(alpha=1/14, adjust=False).mean()  # Wilder RMA
     x["ATR14_%"] = (x["ATR14"] / x["Price"]).replace([np.inf, -np.inf], np.nan) * 100.0
 
     return x
@@ -1912,7 +1854,7 @@ def comment_for_row(r: pd.Series):
         action = f"Alerts: breakout > {f(buy_trigger)} • Dip zone ~ 200DMA ({f(sma200)})"
 
     # --- Fundamental line (short) ---
-    verified = bool(fundy.get("verified", True))
+    verified = bool(fund.get("verified", True))
     if not verified:
         # Do not penalize signal — just flag fundamentals as unverified/stale
         fundy_line = f"{cat} • Fundamentals unverified"
@@ -2491,31 +2433,26 @@ def process_market(m_code, m_conf):
         palign = "ALIGNED" if is_aligned else "CONFLICT"
 
         # --- Fundamental safety gates (prevents "trash BUY" on nice charts) ---
-        # IMPORTANT: only enforce these gates when fundamentals are VERIFIED.
-        # If fundamentals are unavailable/unverified (Yahoo hiccups), do NOT turn that into an AVOID signal.
-        if bool(fundy.get("verified", True)):
-            if t_cat == "Core" and float(fundy.get("score", 0.0)) < 4:
-                sig = "AVOID"
-            if t_cat == "Growth" and float(fundy.get("score", 0.0)) < 3:
-                sig = "AVOID"
-            if t_cat == "Spec" and float(fundy.get("score", 0.0)) < 3:
-                sig = "AVOID"
+        if t_cat == "Core" and fundy["score"] < 4:
+            sig = "AVOID"
+        if t_cat == "Growth" and fundy["score"] < 3:
+            sig = "AVOID"
+        if t_cat == "Spec" and fundy["score"] < 3:
+            sig = "AVOID"
 
 
         # --- DCA quality gate (avoid averaging into weak businesses) ---
         if str(sig).startswith("DCA"):
-            # Only apply DCA business-quality gate when fundamentals are VERIFIED.
-            if bool(fundy.get("verified", True)):
-                min_shield = MIN_SHIELD_FOR_DCA_CORE if t_cat == "Core" else MIN_SHIELD_FOR_DCA_GROWTH
-                if float(fundy.get("score", 0.0)) < float(min_shield):
-                    # Downgrade rather than 'AVOID': the chart may be tradable, but not a "DCA-quality" business.
-                    p_now = float(last.get("Price", last.get("Close", np.nan)))
-                    s200_now = float(last.get("SMA200", np.nan))
-                    if np.isfinite(p_now) and np.isfinite(s200_now) and (p_now > s200_now):
-                        sig = "HOLD"
-                    else:
-                        sig = "WATCH"
-                    sig_auto = False
+            min_shield = MIN_SHIELD_FOR_DCA_CORE if t_cat == "Core" else MIN_SHIELD_FOR_DCA_GROWTH
+            if float(fundy.get("score", 0.0)) < float(min_shield):
+                # Downgrade rather than 'AVOID': the chart may be tradable, but not a "DCA-quality" business.
+                p_now = float(last.get("Price", last.get("Close", np.nan)))
+                s200_now = float(last.get("SMA200", np.nan))
+                if np.isfinite(p_now) and np.isfinite(s200_now) and (p_now > s200_now):
+                    sig = "HOLD"
+                else:
+                    sig = "WATCH"
+                sig_auto = False
 
         # --- Optional litmus stats (forward returns after signals) ---
         litmus = {}
@@ -3233,7 +3170,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v8.0.4")
+    print("Starting TraderBruh Global Hybrid v8.0")
     market_htmls, tab_buttons = [], []
     
     # Force Sydney Time
@@ -3247,7 +3184,7 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v8.0.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body class="mode-standard">
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v7.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body class="mode-standard">
     <div class="topbar">
         <div class="build-stamp">Built: {gen_time} · Copyright @Amitesh</div>
         <div class="mode-switch">
