@@ -310,6 +310,14 @@ MARKETS = {
             "ABNB": ("Airbnb", "Travel.", "Growth"),
             "UBER": ("Uber", "Mobility.", "Growth"),
             "DASH": ("DoorDash", "Delivery.", "Growth"),
+
+            "NKE":  ("Nike", "Athletic Apparel.", "Core"),
+            "PYPL": ("PayPal", "Payments/Fintech.", "Growth"),
+            "CELH": ("Celsius", "Energy Drinks.", "Growth"),
+            "SOFI": ("SoFi", "Fintech Bank.", "Growth"),
+            "RKT":  ("Rocket", "Mortgage/Fintech.", "Spec"),
+            "FUBO": ("fuboTV", "Streaming/Sports.", "Spec"),
+            "BMNU": ("T-REX 2X Long BMNR ETF", "Leveraged ETF.", "Spec"),
             "BKNG": ("Booking", "Travel.", "Core"),
             "NFLX": ("Netflix", "Streaming.", "Growth"),
             "SPOT": ("Spotify", "Audio.", "Growth"),
@@ -711,6 +719,8 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     # --- Distances ---
     x["Dist_to_52W_High_%"] = (x["Price"] / x["High52W"] - 1) * 100.0
     x["Dist_to_SMA200_%"]   = (x["Price"] / x["SMA200"]  - 1) * 100.0
+    x["Dist_EMA21_%"]     = (x["Price"] / x["EMA21"]  - 1) * 100.0
+    x["Dist_SMA50_%"]     = (x["Price"] / x["SMA50"]  - 1) * 100.0
 
     # --- ATR(14) on adjusted OHLC (HighI/LowI) vs prior Price ---
     x["H-L"] = x["HighI"] - x["LowI"]
@@ -2465,6 +2475,34 @@ td { padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align:
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: rgba(255,255,255,0.02); }
 .chart-container { margin-top: 10px; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05); }
+
+/* Mode toggles */
+.mode-standard .advanced-only { display: none !important; }
+.mode-advanced .advanced-only { display: block; }
+
+.topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding: 10px 16px 6px 16px; }
+.build-stamp { text-align:left; color:#94a3b8; font-family:'JetBrains Mono', monospace; font-size:12px; }
+.mode-switch { display:flex; align-items:center; gap:10px; color:#cbd5e1; font-size:12px; }
+.mode-label { opacity:0.9; }
+.switch { position: relative; display:inline-block; width:44px; height:24px; }
+.switch input { opacity:0; width:0; height:0; }
+.slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background: rgba(148,163,184,0.25); transition:.2s; border-radius: 999px; border: 1px solid rgba(255,255,255,0.10); }
+.slider:before { position:absolute; content:""; height:18px; width:18px; left:3px; top:2px; background: rgba(255,255,255,0.85); transition:.2s; border-radius: 999px; }
+input:checked + .slider { background: rgba(56,189,248,0.35); }
+input:checked + .slider:before { transform: translateX(20px); background: rgba(255,255,255,0.95); }
+
+.adv-details { margin-top: 10px; background: rgba(0,0,0,0.18); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 8px 10px; }
+.adv-details > summary { cursor:pointer; list-style:none; color:#e2e8f0; font-weight:600; font-size:12px; }
+.adv-details > summary::-webkit-details-marker { display:none; }
+.adv-grid { margin-top: 8px; display:flex; flex-direction:column; gap:6px; }
+.adv-row { display:flex; gap:10px; align-items:baseline; }
+.adv-k { min-width: 80px; color: var(--text-muted); font-size:12px; }
+.adv-v { color: var(--text-main); font-size:12px; }
+.adv-v .mono { font-family:'JetBrains Mono', monospace; }
+
+.chart-key .key-item { white-space: nowrap; }
+.chart-key .key-item .note { opacity:0.7; font-size:11px; margin-left:4px; }
+
 """
 
 JS = """
@@ -2474,7 +2512,28 @@ function switchMarket(code) {
     document.querySelectorAll('.market-tab').forEach(el => el.classList.remove('active'));
     document.getElementById('tab-'+code).classList.add('active');
 }
+
+function setMode(mode) {
+    const body = document.body;
+    body.classList.remove('mode-standard','mode-advanced');
+    body.classList.add(mode === 'advanced' ? 'mode-advanced' : 'mode-standard');
+    try { localStorage.setItem('tb_mode', mode); } catch(e) {}
+    const cb = document.getElementById('modeToggle');
+    if (cb) cb.checked = (mode === 'advanced');
+}
+
+function initMode() {
+    let mode = 'standard';
+    try { mode = localStorage.getItem('tb_mode') || 'standard'; } catch(e) {}
+    setMode(mode);
+    const cb = document.getElementById('modeToggle');
+    if (cb) {
+        cb.addEventListener('change', () => setMode(cb.checked ? 'advanced' : 'standard'));
+    }
+}
+
 function init() {
+    initMode();
     document.querySelectorAll('.search-input').forEach(input => {
         input.addEventListener('input', (e) => {
             const query = e.target.value.toLowerCase();
@@ -2528,7 +2587,7 @@ def render_card(r, badge_type, curr):
         chart_key = (
             f"<div class=\"chart-key\">"
             f"<span class='key-item'><span class='sw sw-ema'></span>EMA21 <span class='mono'>{_fmt(ema)}</span></span>"
-            f"<span class='key-item'><span class='sw sw-50'></span>SMA50 <span class='mono'>{_fmt(s50)}</span></span>"
+            f"<span class='key-item'><span class='sw sw-50'></span>SMA50<span class='note'>(dot)</span> <span class='mono'>{_fmt(s50)}</span></span>"
             f"<span class='key-item'><span class='sw sw-200'></span>200DMA <span class='mono'>{_fmt(s200)}</span></span>"
             f"</div>"
             f"<div class='muted' style='font-size:11px;margin-top:2px'>EMA21 hugs the candles; 200DMA is the slow long-term line.</div>"
@@ -2555,6 +2614,41 @@ def render_card(r, badge_type, curr):
         "DCA_RECLAIM": "DCA Reclaim",
     }.get(r.get("Signal"), r.get("Signal"))
 
+    
+    # Advanced (technical) block — shown only in Advanced mode
+    def _p(x):
+        try:
+            x = float(x)
+            return f"{curr}{x:.2f}" if np.isfinite(x) else "—"
+        except Exception:
+            return "—"
+
+    def _n(x, suf=""):
+        try:
+            x = float(x)
+            return f"{x:.2f}{suf}" if np.isfinite(x) else "—"
+        except Exception:
+            return "—"
+
+    hi20 = r.get("High20", np.nan)
+    hi52 = r.get("High52W", np.nan)
+    lo52 = r.get("Low52W", np.nan)
+    vol = r.get("Volume", np.nan)
+    vol20 = r.get("Vol20", np.nan)
+    vol_ratio = (float(vol) / float(vol20)) if (vol is not None and vol20 not in (None, 0) and np.isfinite(float(vol)) and np.isfinite(float(vol20)) and float(vol20) != 0) else np.nan
+
+    advanced_html = (
+        "<details class='adv-details advanced-only'>"
+        "<summary>Advanced</summary>"
+        "<div class='adv-grid'>"
+        f"<div class='adv-row'><span class='adv-k'>Levels</span><span class='adv-v mono'>20D High {_p(hi20)} · 52W High {_p(hi52)} · 52W Low {_p(lo52)}</span></div>"
+        f"<div class='adv-row'><span class='adv-k'>Volume</span><span class='adv-v mono'>Today {_n(vol/1e6,'M')} · Avg20 {_n(vol20/1e6,'M')} · Ratio {_n(vol_ratio,'x')}</span></div>"
+        f"<div class='adv-row'><span class='adv-k'>Distances</span><span class='adv-v mono'>vs EMA21 {_n(r.get('Dist_EMA21_%', np.nan),'%')} · vs SMA50 {_n(r.get('Dist_SMA50_%', np.nan),'%')} · vs 200DMA {_n(r.get('Dist_to_SMA200_%', np.nan),'%')}</span></div>"
+        f"<div class='adv-row'><span class='adv-k'>Risk</span><span class='adv-v mono'>ATR(14) {_n(r.get('ATR14', np.nan))} ({_n(r.get('ATR14_%', np.nan),'%/day')})</span></div>"
+        "</div>"
+        "</details>"
+    )
+
     return f"""
     <div class="card searchable-item {euphoria_cls}">
         <div class="card-header">
@@ -2577,6 +2671,7 @@ def render_card(r, badge_type, curr):
         </div>
         <div class="comment-box">{r['Comment']}</div>
         <div class="playbook">{r['Playbook']}</div>
+        {advanced_html}
         <div class="chart-container">{r['_mini_candle']}{chart_key}</div>
     </div>
     """
@@ -2714,8 +2809,18 @@ if __name__ == "__main__":
         act = "active" if m=="AUS" else ""
         tab_buttons.append(f"<button id='tab-{m}' class='market-tab {act}' onclick=\"switchMarket('{m}')\">{conf['name']}</button>")
     
-    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v7.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body>
-    <div style="text-align:center; padding:10px 0 5px 0; color:#64748b; font-size:11px; font-family:'JetBrains Mono', monospace;">Built: {gen_time} · Copyright @Amitesh</div>
+    full = f"""<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>TraderBruh v7.3</title><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script><style>{CSS}</style><script>{JS}</script></head><body class="mode-standard">
+    <div class="topbar">
+        <div class="build-stamp">Built: {gen_time} · Copyright @Amitesh</div>
+        <div class="mode-switch">
+            <span class="mode-label">Standard</span>
+            <label class="switch" title="Toggle Standard/Advanced">
+                <input type="checkbox" id="modeToggle">
+                <span class="slider"></span>
+            </label>
+            <span class="mode-label">Advanced</span>
+        </div>
+    </div>
     <div class="market-tabs">{''.join(tab_buttons)}</div>{''.join(market_htmls)}</body></html>"""
     
     os.makedirs(OUTPUT_DIR, exist_ok=True)
