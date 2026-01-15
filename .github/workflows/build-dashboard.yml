@@ -33,21 +33,6 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: requirements.txt
-
-      - name: Cache TraderBruh fundamentals (.cache)
-        uses: actions/cache@v4
-        with:
-          path: .cache
-          key: traderbruh-fund-cache-${{ runner.os }}-v1
-          restore-keys: |
-            traderbruh-fund-cache-${{ runner.os }}-v1
-
       - name: Gate run time (Sydney)
         id: gate
         run: |
@@ -64,10 +49,8 @@ jobs:
             now = datetime.now(ZoneInfo("Australia/Sydney"))
             weekday_ok = now.weekday() < 5  # Mon–Fri
 
-            # Targets: 09:30, 12:00, 16:01 Sydney
-            targets = [9*60+30, 12*60, 16*60+1]
+            targets = [9*60+30, 12*60, 16*60+1]  # 09:30, 12:00, 16:01
             now_m = now.hour*60 + now.minute
-
             tolerance_min = 5
             time_ok = any(abs(now_m - t) <= tolerance_min for t in targets)
 
@@ -81,11 +64,39 @@ jobs:
           print("Gate:", "RUN" if ok else "SKIP", "|", reason)
           PY
 
+      # --- Only do the rest if this run is a real RUN ---
+      - name: Set up Python
+        if: steps.gate.outputs.ok == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Cache TraderBruh fundamentals (.cache)
+        if: steps.gate.outputs.ok == 'true'
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: traderbruh-fund-cache-${{ runner.os }}-v1
+          restore-keys: |
+            traderbruh-fund-cache-${{ runner.os }}-v1
+
+      - name: Syntax check (fail fast)
+        if: steps.gate.outputs.ok == 'true'
+        run: python -m py_compile traderbruh_web_dashboard_gh.py
+
       - name: Install dependencies
         if: steps.gate.outputs.ok == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      # Optional: super-light smoke test (kept off by default).
+      # Turn ON if you add a --smoke flag to your script later.
+      # - name: Smoke test
+      #   if: steps.gate.outputs.ok == 'true'
+      #   run: python traderbruh_web_dashboard_gh.py --smoke
 
       - name: Build dashboard
         if: steps.gate.outputs.ok == 'true'
