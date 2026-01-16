@@ -1227,7 +1227,7 @@ def render_backtest_block(bt: dict, bench_symbol: str = "") -> str:
             btxt = (
                 f"<div class='muted' style='font-size:12px'>"
                 f"Benchmark ({bench_symbol}): {b.get('return_pct','')}% return, {b.get('max_drawdown_pct','')}% maxDD"
-                f"</div>"
+                f"</div><div class=\"chart-key-sub\">EMA21 hugs candles · 200DMA is long-term trend</div></div>"
             )
 
         win = s.get("win_rate_pct")
@@ -1825,7 +1825,7 @@ def mini_candle(ind, flag_info=None, pattern_lines=None):
                 x=v["Date"],
                 y=v["SMA50"],
                 mode="lines",
-                line=dict(color="rgba(203,213,225,0.35)", width=1, dash="dot"),
+                line=dict(color="rgba(203,213,225,0.55)", width=1, dash="dot"),
             )
         )
     if "SMA200" in v.columns:
@@ -1902,6 +1902,54 @@ def mini_spark(ind):
     fig = go.Figure(go.Scatter(x=v["Date"], y=v["Close"], mode="lines", line=dict(width=1, color="#94a3b8")))
     fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=50, width=120, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
     return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={"displayModeBar": False, "staticPlot": True})
+
+def mini_rs_spark(ind):
+    """Relative Strength sparkline vs benchmark (RS_Line), normalized to 100 at the start of the window.
+
+    Only shown in Advanced mode to avoid clutter.
+    """
+    try:
+        if ind is None or ind.empty or ("RS_Line" not in ind.columns):
+            return ""
+        v = ind.tail(SPARK_DAYS).copy()
+        if v["RS_Line"].notna().sum() < 3:
+            return ""
+        rs = v["RS_Line"].astype(float).replace([np.inf, -np.inf], np.nan)
+        base = rs.iloc[0]
+        if not np.isfinite(base) or base == 0:
+            return ""
+        rsn = (rs / base) * 100.0
+
+        fig = go.Figure(
+            go.Scatter(
+                x=v["Date"],
+                y=rsn,
+                mode="lines",
+                line=dict(width=1, color="rgba(250,204,21,0.75)"),
+            )
+        )
+        # baseline at 100
+        fig.add_trace(
+            go.Scatter(
+                x=[v["Date"].iloc[0], v["Date"].iloc[-1]],
+                y=[100, 100],
+                mode="lines",
+                line=dict(width=1, color="rgba(148,163,184,0.25)", dash="dash"),
+            )
+        )
+        fig.update_layout(
+            margin=dict(l=0, r=0, t=0, b=0),
+            height=55,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            showlegend=False,
+        )
+        fig.update_xaxes(showgrid=False, showticklabels=False, zeroline=False)
+        fig.update_yaxes(showgrid=False, showticklabels=False, zeroline=False)
+        return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={"displayModeBar": False, "staticPlot": True})
+    except Exception:
+        return ""
+
 
 def parse_announcements(market_code):
     if market_code != "AUS": return pd.DataFrame(columns=["Date", "Ticker", "Type", "Headline"])
@@ -2298,7 +2346,7 @@ def process_market(m_code, m_conf):
     snaps_df = pd.DataFrame(snaps)
 
     if not snaps_df.empty:
-        comments, playbooks, candles, sparks = [], [], [], []
+        comments, playbooks, candles, sparks, rs_sparks = [], [], [], [], []
 
         for _, r in snaps_df.iterrows():
             summary, playbook = comment_for_row(r)
@@ -2374,11 +2422,13 @@ def process_market(m_code, m_conf):
             playbooks.append(playbook)
             candles.append(mini_candle(r["_ind"], r["_flag_info"] if r["Flag"] else None, r["_pattern_lines"]))
             sparks.append(mini_spark(r["_ind"]))
+            rs_sparks.append(mini_rs_spark(r["_ind"]))
 
         snaps_df["Comment"] = comments
         snaps_df["Playbook"] = playbooks
         snaps_df["_mini_candle"] = candles
         snaps_df["_mini_spark"] = sparks
+        snaps_df["_rs_spark"] = rs_sparks
 
     return snaps_df, news_df
 
@@ -2432,6 +2482,10 @@ body { background: var(--bg); background-image: radial-gradient(at 0% 0%, rgba(5
 .c-meta { margin-top:6px; font-size:12.5px; color: var(--text-muted); line-height:1.3; }
 .c-news { margin-left:10px; padding:2px 6px; border-radius:8px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10); }
 
+.rs-block { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.06); }
+.rs-title { font-size:11px; color: var(--text-muted); margin: 0 0 2px 0; }
+.why-list { margin: 4px 0 0 0; padding-left: 16px; color: rgba(226,232,240,0.95); }
+.why-list li { margin: 2px 0; }
 .playbook { margin-top: 10px; }
 .pb-row { display:flex; gap:10px; align-items:flex-start; padding:6px 0; border-top: 1px solid rgba(255,255,255,0.06); }
 .pb-row:first-child { border-top: none; padding-top:0; }
@@ -2442,10 +2496,13 @@ body { background: var(--bg); background-image: radial-gradient(at 0% 0%, rgba(5
 .chart-container { margin-top: 10px; }
 .chart-key { display:flex; gap:12px; align-items:center; margin-top:6px; font-size:12px; color: var(--text-muted); flex-wrap:wrap; }
 .key-item { display:inline-flex; align-items:center; gap:6px; }
-.sw { width:10px; height:10px; border-radius:3px; display:inline-block; margin-right:6px; border: 1px solid rgba(255,255,255,0.12); }
-.sw-ema { background: rgba(56,189,248,0.85); }
-.sw-50 { background: rgba(203,213,225,0.35); }
-.sw-200 { background: rgba(148,163,184,0.55); }
+.sw { width:18px; height:0; border-top:2px solid rgba(255,255,255,0.35); display:inline-block; }
+.sw-ema { border-top-color: rgba(56,189,248,0.85); }
+.sw-50 { border-top-color: rgba(203,213,225,0.55); border-top-style:dotted; }
+.sw-200 { border-top-color: rgba(148,163,184,0.65); }
+.chart-key-wrap { margin-top: 8px; }
+.chart-key-sub { font-size:11px; color: rgba(148,163,184,0.85); margin-top:4px; }
+
 .playbook { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; color: #e2e8f0; line-height: 1.6; }
 .playbook b { color: white; }
 .badge { padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; display: inline-block; }
@@ -2479,6 +2536,8 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 /* Mode toggles */
 .mode-standard .advanced-only { display: none !important; }
 .mode-advanced .advanced-only { display: block; }
+.mode-advanced .standard-only { display: none !important; }
+.mode-standard .standard-only { display: block; }
 
 .topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding: 10px 16px 6px 16px; }
 .build-stamp { text-align:left; color:#94a3b8; font-family:'JetBrains Mono', monospace; font-size:12px; }
@@ -2568,6 +2627,105 @@ function init() {
 window.addEventListener('DOMContentLoaded', init);
 """
 
+
+def why_fired(r: pd.Series):
+    """Return a short checklist explaining why the current Signal fired.
+
+    This is intentionally 'rule aligned' with label_row(), so Advanced users can audit logic quickly.
+    """
+    try:
+        sig = str(r.get("Signal", "WATCH")).upper()
+        price  = float(r.get("Price", np.nan))
+        sma200 = float(r.get("SMA200", np.nan))
+        sma50  = float(r.get("SMA50", np.nan))
+        ema21  = float(r.get("EMA21", np.nan))
+        rsi    = float(r.get("RSI14", np.nan))
+        high20 = float(r.get("High20", np.nan))
+        vol    = float(r.get("Volume", np.nan))
+        vol20  = float(r.get("Vol20", np.nan))
+        sma200_slope = float(r.get("SMA200_Slope_%", 0.0))
+        rs3m   = float(r.get("RS_3M_%", np.nan))
+        rs_sl  = float(r.get("RS_Slope20_%", np.nan))
+        market_up = bool(r.get("Market_Uptrend", True))
+        reclaim21  = bool(r.get("Reclaim21", False))
+        reclaim200 = bool(r.get("Reclaim200", False))
+
+        lines = []
+        death_cross = np.isfinite(sma50) and np.isfinite(sma200) and (sma50 < sma200)
+        trend_up = (np.isfinite(price) and np.isfinite(sma200) and np.isfinite(sma50) and
+                    (price > sma200) and (sma50 > sma200) and (sma200_slope > 0))
+
+        # gates
+        if ENABLE_MARKET_REGIME_FILTER and (str(MARKET_FILTER_MODE).lower() == "hard"):
+            lines.append(f"✓ Market gate: {'PASS' if market_up else 'FAIL'}")
+        if ENABLE_RELATIVE_STRENGTH and np.isfinite(rs3m):
+            rs_ok = (rs3m >= RS_MIN_OUTPERF_PCT) and ((not np.isfinite(rs_sl)) or (rs_sl > 0))
+            lines.append(f"✓ Leadership: {'PASS' if rs_ok else 'FAIL'} (RS(3m) {rs3m:+.1f}%, slope {rs_sl:+.1f}%)")
+
+        if sig == "BUY":
+            if trend_up:
+                lines.append("✓ Trend up: price > 200DMA, 50DMA > 200DMA, 200DMA rising")
+            if np.isfinite(high20):
+                buffer_pct = float(RULES.get('buy', {}).get('buffer_pct', 0.0))
+                trig = high20 * (1.0 + buffer_pct)
+                lines.append(f"✓ Breakout: price {price:.2f} > 20D high trigger {trig:.2f}")
+            if np.isfinite(vol20) and vol20 > 0 and np.isfinite(vol):
+                vm = float(RULES.get('buy', {}).get('vol_mult', 1.0))
+                lines.append(f"✓ Volume: {vol/vol20:.2f}× (need ≥ {vm:.2f}×)")
+            if np.isfinite(rsi):
+                lines.append(f"✓ RSI: {rsi:.0f} within buy range")
+
+        elif sig in ("DCA_DIP", "DCA_RECLAIM"):
+            if np.isfinite(sma200) and sma200_slope > 0:
+                lines.append("✓ 200DMA rising (dip-buying only in uptrend)")
+            if np.isfinite(price) and np.isfinite(sma200):
+                prox = float(RULES['dca'].get('sma200_proximity', 0.04))
+                allow_below = float(RULES['dca'].get('allow_below_pct', 0.02))
+                lo = sma200 * (1.0 - allow_below)
+                hi = sma200 * (1.0 + prox)
+                lines.append(f"✓ Near 200DMA zone: {lo:.2f}–{hi:.2f}")
+            if np.isfinite(rsi):
+                lines.append(f"✓ RSI: {rsi:.0f} ≤ {float(RULES['dca'].get('rsi_max', 55)):.0f}")
+            if death_cross:
+                lines.append("✓ No death-cross: FAIL")
+            else:
+                lines.append("✓ No death-cross: PASS")
+
+            if sig == "DCA_RECLAIM":
+                if reclaim21:
+                    lines.append(f"✓ Reclaim: closed back above EMA21 ({ema21:.2f})")
+                if reclaim200:
+                    lines.append(f"✓ Reclaim: closed back above 200DMA ({sma200:.2f})")
+                if not (reclaim21 or reclaim200):
+                    lines.append("✓ Reclaim signal: (none) — check rules")
+            else:
+                lines.append("✓ Dip day (no reclaim confirmation today)")
+
+        elif sig == "TRIM":
+            lines.append("✓ Uptrend intact but extended (take partials / tighten stop)")
+
+        elif sig == "AVOID":
+            if np.isfinite(price) and np.isfinite(sma200) and (price < sma200) and (sma200_slope < 0):
+                lines.append("✓ Below falling 200DMA (stage-4)")
+            if death_cross:
+                lines.append("✓ Death cross (50DMA < 200DMA)")
+            if np.isfinite(price) and np.isfinite(sma200) and price < sma200:
+                lines.append("✓ Price below 200DMA")
+
+        elif sig == "HOLD":
+            if trend_up:
+                lines.append("✓ Trend up, but no breakout/dip signal today")
+            else:
+                lines.append("✓ Holding zone (trend not clearly broken)")
+
+        else:
+            lines.append("✓ No strong edge (base / early / mixed signals)")
+
+        # keep it short
+        return lines[:7]
+    except Exception:
+        return []
+
 def render_card(r, badge_type, curr):
     euphoria_cls = "euphoria-glow" if is_euphoria(r) else ""
     euphoria_tag = '<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;margin-left:6px">Euphoria</span>' if is_euphoria(r) else ""
@@ -2585,7 +2743,7 @@ def render_card(r, badge_type, curr):
         s200 = r.get("SMA200", np.nan)
 
         chart_key = (
-            f"<div class=\"chart-key\">"
+            f"<div class=\"chart-key-wrap\"><div class=\"chart-key\">"
             f"<span class='key-item'><span class='sw sw-ema'></span>EMA21 <span class='mono'>{_fmt(ema)}</span></span>"
             f"<span class='key-item'><span class='sw sw-50'></span>SMA50<span class='note'>(dot)</span> <span class='mono'>{_fmt(s50)}</span></span>"
             f"<span class='key-item'><span class='sw sw-200'></span>200DMA <span class='mono'>{_fmt(s200)}</span></span>"
@@ -2637,10 +2795,16 @@ def render_card(r, badge_type, curr):
     vol20 = r.get("Vol20", np.nan)
     vol_ratio = (float(vol) / float(vol20)) if (vol is not None and vol20 not in (None, 0) and np.isfinite(float(vol)) and np.isfinite(float(vol20)) and float(vol20) != 0) else np.nan
 
+    
+    why_lines = why_fired(r)
+    why_html = ""
+    if why_lines:
+        items = "".join(f"<li>{w}</li>" for w in why_lines)
+        why_html = f"<div class='adv-row'><span class='adv-k'>Why</span><span class='adv-v'><ul class='why-list'>{items}</ul></span></div>"
     advanced_html = (
         "<details class='adv-details advanced-only'>"
         "<summary>Advanced</summary>"
-        "<div class='adv-grid'>"
+        "<div class='adv-grid'>" f"{why_html}"
         f"<div class='adv-row'><span class='adv-k'>Levels</span><span class='adv-v mono'>20D High {_p(hi20)} · 52W High {_p(hi52)} · 52W Low {_p(lo52)}</span></div>"
         f"<div class='adv-row'><span class='adv-k'>Volume</span><span class='adv-v mono'>Today {_n(vol/1e6,'M')} · Avg20 {_n(vol20/1e6,'M')} · Ratio {_n(vol_ratio,'x')}</span></div>"
         f"<div class='adv-row'><span class='adv-k'>Distances</span><span class='adv-v mono'>vs EMA21 {_n(r.get('Dist_EMA21_%', np.nan),'%')} · vs SMA50 {_n(r.get('Dist_SMA50_%', np.nan),'%')} · vs 200DMA {_n(r.get('Dist_to_SMA200_%', np.nan),'%')}</span></div>"
@@ -2672,7 +2836,7 @@ def render_card(r, badge_type, curr):
         <div class="comment-box">{r['Comment']}</div>
         <div class="playbook">{r['Playbook']}</div>
         {advanced_html}
-        <div class="chart-container">{r['_mini_candle']}{chart_key}</div>
+        <div class="chart-container">{r['_mini_candle']}{chart_key}<div class="rs-block advanced-only"><div class="rs-title">RS vs market (normalized)</div>{r.get('_rs_spark','')}</div></div>
     </div>
     """
 def render_kpi(label, val, color_cls):
@@ -2795,7 +2959,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v7.3...")
+    print("Starting TraderBruh Global Hybrid v7.5")
     market_htmls, tab_buttons = [], []
     
     # Force Sydney Time
@@ -2826,4 +2990,3 @@ if __name__ == "__main__":
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(OUTPUT_HTML, "w", encoding="utf-8") as f: f.write(full)
     print("Done:", OUTPUT_HTML)
-
