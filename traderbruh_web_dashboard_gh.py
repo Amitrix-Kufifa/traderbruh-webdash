@@ -1,6 +1,6 @@
 # traderbruh_web_dashboard_gh.py
 # TraderBruh — Global Web Dashboard (ASX / USA / INDIA)
-# Version: Ultimate 8.0 (Institutional robustness: Wilder ATR/RSI, fundamentals cache + unverified fallback, vol-adaptive patterns, ATR-risk backtest sizing, parallel price fetch)
+# Version: Ultimate 7.0 (Split DCA Dip/Reclaim + clearer Investor-mode "past results")
 # - Fixed breakout logic (20D/52W highs shifted to avoid self-referencing)
 # - Added HOLD + TRIM signals (explicit hodl / take-profit guidance)
 # - Optional split/dividend-adjusted indicator series (AdjClose) for cleaner long lookbacks
@@ -12,7 +12,6 @@
 # - Renamed 'Litmus' → 'Past results' with simpler explanation
 
 from datetime import datetime, time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import os, re, glob, json
 import numpy as np
 import pandas as pd
@@ -48,8 +47,7 @@ SPARK_DAYS          = 90
 NEWS_WINDOW_DAYS    = 14
 PATTERN_LOOKBACK    = 180
 PIVOT_WINDOW        = 4
-PRICE_TOL           = 0.03  # fallback only (if ATR ref unavailable)
-_SIM_ATR_REF        = np.nan  # set per ticker during pattern scanning
+PRICE_TOL           = 0.03
 PATTERNS_CONFIRMED_ONLY = True
 
 
@@ -80,97 +78,6 @@ BACKTEST_DCA_MAX_LOTS = 2                  # cap adds per name (2 lots max)
 BACKTEST_DCA_ADD_FRACTION = 0.5            # add-size vs base lot (0.5 = half-lot adds)
 BACKTEST_TRIM_FRACTION = 0.33              # when TRIM triggers, sell this fraction of position
 BACKTEST_FEE_BPS = 10                      # 10 bps per trade side (rough friction estimate)
-
-# Backtest sizing upgrade (volatility / ATR targeting)
-BACKTEST_RISK_PCT = 0.005              # risk budget per new position (0.5% of equity)
-BACKTEST_STOP_ATR_MULT = 3.0           # assume an ATR-based stop distance
-BACKTEST_MAX_POS_VALUE_PCT = 0.20      # cap position notional (avoid concentration)
-BACKTEST_MIN_CASH_BUFFER_PCT = 0.01    # keep a small cash buffer
-
-# --- Fundamentals caching (robustness + speed) ---
-# Fundamentals don't change daily; yfinance info/statements can be slow or rate-limited.
-# This cache becomes most valuable if you persist it across runs (e.g., via GitHub Actions cache).
-ENABLE_FUNDAMENTALS_CACHE = True
-FUNDAMENTALS_CACHE_PATH = os.environ.get("TRADERBRUH_FUND_CACHE", ".cache/traderbruh_fundamentals.json")
-FUNDAMENTALS_CACHE_TTL_DAYS = 14           # refresh cadence
-FUNDAMENTALS_CACHE_STALE_OK_DAYS = 90      # if live fetch fails, allow stale cache up to this age
-FUNDAMENTALS_FAIL_POLICY = "unverified"    # keeps technical signal + flags fundamentals as unverified
-
-# --- Parallel price fetching (kept conservative to reduce rate-limit risk) ---
-ENABLE_PARALLEL_PRICE_FETCH = True
-PRICE_FETCH_MAX_WORKERS = 6
-
-# --- Volatility-adaptive pattern tolerance ---
-# Instead of a fixed % tolerance, compare pivots using a fraction of recent ATR.
-SIMILAR_ATR_MULT = 0.6   # abs(a-b) <= SIMILAR_ATR_MULT * median_ATR
-
-# --- Internal caches (in-memory) ---
-_FUND_CACHE = None
-_FUND_CACHE_DIR_READY = False
-
-def _ensure_cache_dir():
-    global _FUND_CACHE_DIR_READY
-    if _FUND_CACHE_DIR_READY:
-        return
-    try:
-        d = os.path.dirname(FUNDAMENTALS_CACHE_PATH)
-        if d:
-            os.makedirs(d, exist_ok=True)
-    except Exception:
-        pass
-    _FUND_CACHE_DIR_READY = True
-
-def _load_fund_cache():
-    global _FUND_CACHE
-    if _FUND_CACHE is not None:
-        return _FUND_CACHE
-    _ensure_cache_dir()
-    try:
-        if os.path.exists(FUNDAMENTALS_CACHE_PATH):
-            with open(FUNDAMENTALS_CACHE_PATH, "r", encoding="utf-8") as f:
-                _FUND_CACHE = json.load(f)
-        else:
-            _FUND_CACHE = {}
-    except Exception:
-        _FUND_CACHE = {}
-    if not isinstance(_FUND_CACHE, dict):
-        _FUND_CACHE = {}
-    return _FUND_CACHE
-
-def _save_fund_cache():
-    if not ENABLE_FUNDAMENTALS_CACHE:
-        return
-    _ensure_cache_dir()
-    try:
-        with open(FUNDAMENTALS_CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(_FUND_CACHE or {}, f, ensure_ascii=False, indent=2, sort_keys=True)
-    except Exception:
-        pass
-
-def _cache_key(symbol: str, category: str) -> str:
-    return f"{symbol}||{category}"
-
-def _cache_age_days(ts: float) -> float:
-    try:
-        return (datetime.utcnow().timestamp() - float(ts)) / 86400.0
-    except Exception:
-        return 1e9
-
-def _get_cached_fund(symbol: str, category: str):
-    cache = _load_fund_cache()
-    v = cache.get(_cache_key(symbol, category))
-    if not isinstance(v, dict):
-        return None, None
-    age = _cache_age_days(v.get("ts", 0.0))
-    return v, age
-
-def _set_cached_fund(symbol: str, category: str, payload: dict):
-    if not ENABLE_FUNDAMENTALS_CACHE:
-        return
-    cache = _load_fund_cache()
-    payload = dict(payload or {})
-    payload["ts"] = datetime.utcnow().timestamp()
-    cache[_cache_key(symbol, category)] = payload
 
 
 
@@ -564,17 +471,6 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
     2. Growth: Rule of 40 + Mohanram-style intangibles + survival buffer (runway)
     3. Spec : Runway, lifestyle vs work, cash floor (survival)
     """
-    # --- Cache (avoid yfinance SPOF) ---
-    if ENABLE_FUNDAMENTALS_CACHE:
-        cached, age = _get_cached_fund(symbol, category)
-        if cached is not None and age is not None and age <= float(FUNDAMENTALS_CACHE_TTL_DAYS):
-            out = dict(cached)
-            out["verified"] = bool(out.get("verified", True))
-            out["source"] = "cache"
-            out["cache_age_days"] = float(age)
-            return out
-
-
     try:
         tick = yf.Ticker(symbol)
         # --- Safely get info dict ---
@@ -741,52 +637,22 @@ def fetch_dynamic_fundamentals(symbol: str, category: str):
         # Clamp and return
         score = max(0.0, min(10.0, score))
 
-        out = {
-                    "score": round(score, 1),
-                    "tier": tier,
-                    "category_mode": category,
-                    "key_metric": key_metric_str,
-                    "roe": net_inc / equity if equity > 0 else 0.0,
-                    "margin": profit_margin,
-                    "debteq": debt_to_equity_val,
-                    "cash": cash,
-                    "runway_months": runway_months or 0.0,
-                    "burn_annual": burn_annual,
-                }
-        out["verified"] = True
-        out["source"] = "live"
-        _set_cached_fund(symbol, category, out)
-        _save_fund_cache()
-        return out
+        return {
+            "score": round(score, 1),
+            "tier": tier,
+            "category_mode": category,
+            "key_metric": key_metric_str,
+            "roe": net_inc / equity if equity > 0 else 0.0,
+            "margin": profit_margin,
+            "debteq": debt_to_equity_val,
+            "cash": cash,
+            "runway_months": runway_months or 0.0,
+            "burn_annual": burn_annual,
+        }
 
     except Exception:
-        # Fallback: if live fetch fails, use stale cache if available (up to FUNDAMENTALS_CACHE_STALE_OK_DAYS)
-        if ENABLE_FUNDAMENTALS_CACHE:
-            cached, age = _get_cached_fund(symbol, category)
-            if cached is not None and age is not None and age <= float(FUNDAMENTALS_CACHE_STALE_OK_DAYS):
-                out = dict(cached)
-                out["source"] = "stale-cache"
-                out["cache_age_days"] = float(age)
-                # mark as unverified if beyond TTL
-                out["verified"] = bool(age <= float(FUNDAMENTALS_CACHE_TTL_DAYS))
-                return out
+        return {"score": 0.0, "tier": "Error", "category_mode": category, "key_metric": "-", "roe": 0.0, "margin": 0.0, "debteq": 0.0, "cash": 0.0, "runway_months": 0.0, "burn_annual": 0.0}
 
-        # No cache available — do not punish the technical signal; mark fundamentals as unverified
-        return {
-            "score": 0.0,
-            "tier": "Unverified",
-            "category_mode": str(category),
-            "key_metric": "-",
-            "roe": 0.0,
-            "gross": 0.0,
-            "oper": 0.0,
-            "debteq": 0.0,
-            "cash": 0.0,
-            "runway_months": 0.0,
-            "burn_annual": 0.0,
-            "verified": False,
-            "source": "none",
-        }
 def indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     Indicator stack used by the dashboard.
@@ -798,23 +664,10 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     x = df.copy().sort_values("Date").reset_index(drop=True)
 
-    # Defensive: yfinance can occasionally return MultiIndex or duplicate columns.
-    # If duplicates exist, pandas can return a DataFrame when selecting a "single" column (e.g. AdjClose),
-    # which breaks pd.to_numeric(). We keep the first occurrence.
-    if isinstance(x.columns, pd.MultiIndex):
-        x.columns = x.columns.get_level_values(0)
-    if hasattr(x.columns, 'duplicated') and x.columns.duplicated().any():
-        x = x.loc[:, ~x.columns.duplicated()]
-
     # --- Price series for indicator calculations ---
     if USE_ADJUSTED_FOR_INDICATORS and ("AdjClose" in x.columns):
         # AdjClose is typically aligned to last close (factor ~1 on the latest bar)
-        adj = x["AdjClose"]
-        # Pandas returns a DataFrame if there are duplicate 'AdjClose' columns
-        # (or a MultiIndex selection). Take the first column defensively.
-        if isinstance(adj, pd.DataFrame):
-            adj = adj.iloc[:, 0]
-        x["Price"] = pd.to_numeric(adj, errors="coerce")
+        x["Price"] = pd.to_numeric(x["AdjClose"], errors="coerce")
         # Approximate adjusted OHLC using the same adjustment factor as close
         with np.errstate(divide="ignore", invalid="ignore"):
             adj_factor = x["Price"] / pd.to_numeric(x["Close"], errors="coerce")
@@ -856,14 +709,13 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     x["DollarVol20"] = x["Vol20"] * x["Price"]
 
 
-    # --- RSI(14) on Price (Wilder smoothing / RMA) ---
+    # --- RSI(14) on Price ---
     chg = x["Price"].diff()
-    up = chg.clip(lower=0)
-    dn = (-chg).clip(lower=0)
-    avg_up = up.ewm(alpha=1/14, adjust=False).mean()
-    avg_dn = dn.ewm(alpha=1/14, adjust=False).mean()
-    RS = avg_up / avg_dn.replace(0, np.nan)
+    gains = chg.clip(lower=0).rolling(14).mean()
+    losses = (-chg).clip(lower=0).rolling(14).mean()
+    RS = gains / losses
     x["RSI14"] = 100 - (100 / (1 + RS))
+
     # --- Distances ---
     x["Dist_to_52W_High_%"] = (x["Price"] / x["High52W"] - 1) * 100.0
     x["Dist_to_SMA200_%"]   = (x["Price"] / x["SMA200"]  - 1) * 100.0
@@ -875,7 +727,7 @@ def indicators(df: pd.DataFrame) -> pd.DataFrame:
     x["H-C"] = (x["HighI"] - x["Price"].shift(1)).abs()
     x["L-C"] = (x["LowI"]  - x["Price"].shift(1)).abs()
     x["TR"]  = x[["H-L", "H-C", "L-C"]].max(axis=1)
-    x["ATR14"]   = x["TR"].ewm(alpha=1/14, adjust=False).mean()  # Wilder RMA
+    x["ATR14"]   = x["TR"].rolling(14).mean()
     x["ATR14_%"] = (x["ATR14"] / x["Price"]).replace([np.inf, -np.inf], np.nan) * 100.0
 
     return x
@@ -1089,7 +941,7 @@ def backtest_investor_variant2(
     Implementation notes:
     - Trades execute on next day's Open (simple + avoids same-bar lookahead).
     - Uses the dashboard's *label_row* signals (no pattern-based auto-upgrades to avoid lookahead).
-    - Volatility-targeted sizing: risk-budget per position based on ATR (dollar-risk targeting).
+    - Equal-lot sizing up to BACKTEST_MAX_POSITIONS; leftover stays in cash.
     - DCA adds are capped by BACKTEST_DCA_MAX_LOTS.
     - Very simple friction model via BACKTEST_FEE_BPS.
     """
@@ -1175,6 +1027,8 @@ def backtest_investor_variant2(
         exposure_n = 0
 
         eq_series = []
+
+        base_lot_value = equity0 / float(BACKTEST_MAX_POSITIONS)
 
         for i in range(len(dates) - 1):
             d = dates[i]
@@ -1274,7 +1128,7 @@ def backtest_investor_variant2(
                 if not np.isfinite(open_px):
                     continue
                 buy_px = open_px * (1.0 + fee)
-                add_value = float(positions[t].get("shares", 0.0)) * open_px * float(BACKTEST_DCA_ADD_FRACTION)
+                add_value = base_lot_value * float(BACKTEST_DCA_ADD_FRACTION)
                 if cash < add_value:
                     continue
                 add_sh = add_value / buy_px
@@ -1296,42 +1150,17 @@ def backtest_investor_variant2(
                     df = data.get(t)
                     if df is None or d_next not in df.index:
                         continue
-
+                    if cash < base_lot_value:
+                        break
                     open_px = float(df.loc[d_next].get("Open", np.nan))
-                    if not np.isfinite(open_px) or open_px <= 0:
+                    if not np.isfinite(open_px):
                         continue
                     buy_px = open_px * (1.0 + fee)
-
-                    # Risk-based sizing (ATR targeting)
-                    try:
-                        atr = float(df.loc[d].get("ATR14", np.nan))
-                    except Exception:
-                        atr = np.nan
-
-                    if not np.isfinite(atr) or atr <= 0:
-                        # Fallback: small starter position if ATR unavailable
-                        pos_value = min(cash * 0.10, equity * float(BACKTEST_MAX_POS_VALUE_PCT))
-                    else:
-                        risk_dollars = equity * float(BACKTEST_RISK_PCT)
-                        risk_per_share = atr * float(BACKTEST_STOP_ATR_MULT)
-                        shares = risk_dollars / risk_per_share
-                        pos_value = shares * buy_px
-                        # concentration cap
-                        pos_value = min(pos_value, equity * float(BACKTEST_MAX_POS_VALUE_PCT))
-
-                    # Cash cap + buffer
-                    cash_buffer = equity * float(BACKTEST_MIN_CASH_BUFFER_PCT)
-                    max_afford = max(0.0, cash - cash_buffer)
-                    if pos_value > max_afford:
-                        pos_value = max_afford
-                    if pos_value <= 0:
-                        continue
-
-                    sh = pos_value / buy_px
+                    sh = base_lot_value / buy_px
                     positions[t] = {"shares": sh, "avg_cost": buy_px, "lots": 1.0, "entry_sig": str(sig)}
-                    cash -= pos_value
+                    cash -= base_lot_value
 
-# Final equity at last close
+        # Final equity at last close
         d_last = dates[-1]
         equity = cash
         for t, pos in positions.items():
@@ -1398,7 +1227,7 @@ def render_backtest_block(bt: dict, bench_symbol: str = "") -> str:
             btxt = (
                 f"<div class='muted' style='font-size:12px'>"
                 f"Benchmark ({bench_symbol}): {b.get('return_pct','')}% return, {b.get('max_drawdown_pct','')}% maxDD"
-                f"</div><div class=\"chart-key-sub\">EMA21 hugs candles · 200DMA is long-term trend</div></div>"
+                f"</div>"
             )
 
         win = s.get("win_rate_pct")
@@ -1443,22 +1272,7 @@ def _pivots(ind, window=PIVOT_WINDOW):
     v["PL"] = (v["Low"]  == v["Low"].rolling(window * 2 + 1, center=True).min()).fillna(False)
     return v
 
-def _similar(a, b, tol=PRICE_TOL, atr_ref=None):
-    """Volatility-adaptive similarity test.
-
-    Primary: treat two pivot prices as 'similar' if their difference is small relative to recent ATR.
-    Fallback: fixed % tolerance (PRICE_TOL) if ATR isn't available.
-    """
-    if atr_ref is None:
-        try:
-            atr_ref = globals().get("_SIM_ATR_REF", np.nan)
-        except Exception:
-            atr_ref = np.nan
-    try:
-        if atr_ref is not None and np.isfinite(float(atr_ref)):
-            return abs(a - b) <= (SIMILAR_ATR_MULT * float(atr_ref))
-    except Exception:
-        pass
+def _similar(a, b, tol=PRICE_TOL):
     m = (a + b) / 2.0
     return (abs(a - b) / m) <= tol
 
@@ -1867,14 +1681,7 @@ def comment_for_row(r: pd.Series):
         action = f"Alerts: breakout > {f(buy_trigger)} • Dip zone ~ 200DMA ({f(sma200)})"
 
     # --- Fundamental line (short) ---
-    verified = bool(fundy.get("verified", True))
-    if not verified:
-        # Do not penalize signal — just flag fundamentals as unverified/stale
-        fundy_line = f"{cat} • Fundamentals unverified"
-        if np.isfinite(score) and score > 0:
-            fundy_line += f" (last {score:.1f}/10)"
-    else:
-        fundy_line = f"{cat} • {score:.1f}/10 {tier}"
+    fundy_line = f"{cat} • {score:.1f}/10 {tier}"
     if key_metric and key_metric != "-":
         fundy_line += f" • {key_metric}"
 
@@ -2018,7 +1825,7 @@ def mini_candle(ind, flag_info=None, pattern_lines=None):
                 x=v["Date"],
                 y=v["SMA50"],
                 mode="lines",
-                line=dict(color="rgba(203,213,225,0.55)", width=1, dash="dot"),
+                line=dict(color="rgba(203,213,225,0.35)", width=1, dash="dot"),
             )
         )
     if "SMA200" in v.columns:
@@ -2095,54 +1902,6 @@ def mini_spark(ind):
     fig = go.Figure(go.Scatter(x=v["Date"], y=v["Close"], mode="lines", line=dict(width=1, color="#94a3b8")))
     fig.update_layout(margin=dict(l=0,r=0,t=0,b=0), height=50, width=120, xaxis=dict(visible=False), yaxis=dict(visible=False), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=False)
     return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={"displayModeBar": False, "staticPlot": True})
-
-def mini_rs_spark(ind):
-    """Relative Strength sparkline vs benchmark (RS_Line), normalized to 100 at the start of the window.
-
-    Only shown in Advanced mode to avoid clutter.
-    """
-    try:
-        if ind is None or ind.empty or ("RS_Line" not in ind.columns):
-            return ""
-        v = ind.tail(SPARK_DAYS).copy()
-        if v["RS_Line"].notna().sum() < 3:
-            return ""
-        rs = v["RS_Line"].astype(float).replace([np.inf, -np.inf], np.nan)
-        base = rs.iloc[0]
-        if not np.isfinite(base) or base == 0:
-            return ""
-        rsn = (rs / base) * 100.0
-
-        fig = go.Figure(
-            go.Scatter(
-                x=v["Date"],
-                y=rsn,
-                mode="lines",
-                line=dict(width=1, color="rgba(250,204,21,0.75)"),
-            )
-        )
-        # baseline at 100
-        fig.add_trace(
-            go.Scatter(
-                x=[v["Date"].iloc[0], v["Date"].iloc[-1]],
-                y=[100, 100],
-                mode="lines",
-                line=dict(width=1, color="rgba(148,163,184,0.25)", dash="dash"),
-            )
-        )
-        fig.update_layout(
-            margin=dict(l=0, r=0, t=0, b=0),
-            height=55,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            showlegend=False,
-        )
-        fig.update_xaxes(showgrid=False, showticklabels=False, zeroline=False)
-        fig.update_yaxes(showgrid=False, showticklabels=False, zeroline=False)
-        return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={"displayModeBar": False, "staticPlot": True})
-    except Exception:
-        return ""
-
 
 def parse_announcements(market_code):
     if market_code != "AUS": return pd.DataFrame(columns=["Date", "Ticker", "Type", "Headline"])
@@ -2301,28 +2060,6 @@ def process_market(m_code, m_conf):
         mood = "RISK-ON" if market_up else "RISK-OFF"
         print(f"    Benchmark: {bench['symbol']} → {mood}")
 
-
-    # --- Price history prefetch (parallel) ---
-    hist_map = {}
-    if ENABLE_PARALLEL_PRICE_FETCH:
-        tasks = {}
-        with ThreadPoolExecutor(max_workers=int(PRICE_FETCH_MAX_WORKERS)) as ex:
-            for _t_key, _t_meta in m_conf["tickers"].items():
-                _raw = f"{_t_key}{m_conf['suffix']}"
-                _dl = _raw.replace(".", "-") if (m_code == "USA" and "." in _raw) else _raw
-                tasks[ex.submit(fetch_prices, _dl, m_conf.get("tz", "Australia/Sydney"))] = _t_key
-            for fut in as_completed(tasks):
-                _t_key = tasks[fut]
-                try:
-                    hist_map[_t_key] = fut.result()
-                except Exception:
-                    hist_map[_t_key] = pd.DataFrame()
-    else:
-        for _t_key, _t_meta in m_conf["tickers"].items():
-            _raw = f"{_t_key}{m_conf['suffix']}"
-            _dl = _raw.replace(".", "-") if (m_code == "USA" and "." in _raw) else _raw
-            hist_map[_t_key] = fetch_prices(_dl, m_conf.get("tz", "Australia/Sydney"))
-
     for t_key, t_meta in m_conf["tickers"].items():
         t_name, t_desc, t_cat = t_meta
 
@@ -2330,9 +2067,7 @@ def process_market(m_code, m_conf):
         # Yahoo quirks: BRK.B => BRK-B, etc.
         dl_sym = raw_sym.replace(".", "-") if (m_code == "USA" and "." in raw_sym) else raw_sym
 
-        df = hist_map.get(t_key)
-        if df is None:
-            df = fetch_prices(dl_sym, m_conf["tz"])
+        df = fetch_prices(dl_sym, m_conf["tz"])
         if df.empty:
             continue
 
@@ -2358,13 +2093,6 @@ def process_market(m_code, m_conf):
 
         # --- Flag detection (bull flag) ---
         flag_flag, flag_det = detect_flag(ind)
-
-
-        # Set ATR reference for volatility-adaptive pattern tolerance (median of recent ATR)
-        try:
-            globals()["_SIM_ATR_REF"] = float(np.nanmedian(ind["ATR14"].tail(60)))
-        except Exception:
-            globals()["_SIM_ATR_REF"] = np.nan
 
         # --- Pattern detection ---
         pats_all = (
@@ -2570,7 +2298,7 @@ def process_market(m_code, m_conf):
     snaps_df = pd.DataFrame(snaps)
 
     if not snaps_df.empty:
-        comments, playbooks, candles, sparks, rs_sparks = [], [], [], [], []
+        comments, playbooks, candles, sparks = [], [], [], []
 
         for _, r in snaps_df.iterrows():
             summary, playbook = comment_for_row(r)
@@ -2646,13 +2374,11 @@ def process_market(m_code, m_conf):
             playbooks.append(playbook)
             candles.append(mini_candle(r["_ind"], r["_flag_info"] if r["Flag"] else None, r["_pattern_lines"]))
             sparks.append(mini_spark(r["_ind"]))
-            rs_sparks.append(mini_rs_spark(r["_ind"]))
 
         snaps_df["Comment"] = comments
         snaps_df["Playbook"] = playbooks
         snaps_df["_mini_candle"] = candles
         snaps_df["_mini_spark"] = sparks
-        snaps_df["_rs_spark"] = rs_sparks
 
     return snaps_df, news_df
 
@@ -2706,10 +2432,6 @@ body { background: var(--bg); background-image: radial-gradient(at 0% 0%, rgba(5
 .c-meta { margin-top:6px; font-size:12.5px; color: var(--text-muted); line-height:1.3; }
 .c-news { margin-left:10px; padding:2px 6px; border-radius:8px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10); }
 
-.rs-block { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.06); }
-.rs-title { font-size:11px; color: var(--text-muted); margin: 0 0 2px 0; }
-.why-list { margin: 4px 0 0 0; padding-left: 16px; color: rgba(226,232,240,0.95); }
-.why-list li { margin: 2px 0; }
 .playbook { margin-top: 10px; }
 .pb-row { display:flex; gap:10px; align-items:flex-start; padding:6px 0; border-top: 1px solid rgba(255,255,255,0.06); }
 .pb-row:first-child { border-top: none; padding-top:0; }
@@ -2720,13 +2442,10 @@ body { background: var(--bg); background-image: radial-gradient(at 0% 0%, rgba(5
 .chart-container { margin-top: 10px; }
 .chart-key { display:flex; gap:12px; align-items:center; margin-top:6px; font-size:12px; color: var(--text-muted); flex-wrap:wrap; }
 .key-item { display:inline-flex; align-items:center; gap:6px; }
-.sw { width:18px; height:0; border-top:2px solid rgba(255,255,255,0.35); display:inline-block; }
-.sw-ema { border-top-color: rgba(56,189,248,0.85); }
-.sw-50 { border-top-color: rgba(203,213,225,0.55); border-top-style:dotted; }
-.sw-200 { border-top-color: rgba(148,163,184,0.65); }
-.chart-key-wrap { margin-top: 8px; }
-.chart-key-sub { font-size:11px; color: rgba(148,163,184,0.85); margin-top:4px; }
-
+.sw { width:10px; height:10px; border-radius:3px; display:inline-block; margin-right:6px; border: 1px solid rgba(255,255,255,0.12); }
+.sw-ema { background: rgba(56,189,248,0.85); }
+.sw-50 { background: rgba(203,213,225,0.35); }
+.sw-200 { background: rgba(148,163,184,0.55); }
 .playbook { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; color: #e2e8f0; line-height: 1.6; }
 .playbook b { color: white; }
 .badge { padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; display: inline-block; }
@@ -2760,8 +2479,6 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 /* Mode toggles */
 .mode-standard .advanced-only { display: none !important; }
 .mode-advanced .advanced-only { display: block; }
-.mode-advanced .standard-only { display: none !important; }
-.mode-standard .standard-only { display: block; }
 
 .topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding: 10px 16px 6px 16px; }
 .build-stamp { text-align:left; color:#94a3b8; font-family:'JetBrains Mono', monospace; font-size:12px; }
@@ -2851,105 +2568,6 @@ function init() {
 window.addEventListener('DOMContentLoaded', init);
 """
 
-
-def why_fired(r: pd.Series):
-    """Return a short checklist explaining why the current Signal fired.
-
-    This is intentionally 'rule aligned' with label_row(), so Advanced users can audit logic quickly.
-    """
-    try:
-        sig = str(r.get("Signal", "WATCH")).upper()
-        price  = float(r.get("Price", np.nan))
-        sma200 = float(r.get("SMA200", np.nan))
-        sma50  = float(r.get("SMA50", np.nan))
-        ema21  = float(r.get("EMA21", np.nan))
-        rsi    = float(r.get("RSI14", np.nan))
-        high20 = float(r.get("High20", np.nan))
-        vol    = float(r.get("Volume", np.nan))
-        vol20  = float(r.get("Vol20", np.nan))
-        sma200_slope = float(r.get("SMA200_Slope_%", 0.0))
-        rs3m   = float(r.get("RS_3M_%", np.nan))
-        rs_sl  = float(r.get("RS_Slope20_%", np.nan))
-        market_up = bool(r.get("Market_Uptrend", True))
-        reclaim21  = bool(r.get("Reclaim21", False))
-        reclaim200 = bool(r.get("Reclaim200", False))
-
-        lines = []
-        death_cross = np.isfinite(sma50) and np.isfinite(sma200) and (sma50 < sma200)
-        trend_up = (np.isfinite(price) and np.isfinite(sma200) and np.isfinite(sma50) and
-                    (price > sma200) and (sma50 > sma200) and (sma200_slope > 0))
-
-        # gates
-        if ENABLE_MARKET_REGIME_FILTER and (str(MARKET_FILTER_MODE).lower() == "hard"):
-            lines.append(f"✓ Market gate: {'PASS' if market_up else 'FAIL'}")
-        if ENABLE_RELATIVE_STRENGTH and np.isfinite(rs3m):
-            rs_ok = (rs3m >= RS_MIN_OUTPERF_PCT) and ((not np.isfinite(rs_sl)) or (rs_sl > 0))
-            lines.append(f"✓ Leadership: {'PASS' if rs_ok else 'FAIL'} (RS(3m) {rs3m:+.1f}%, slope {rs_sl:+.1f}%)")
-
-        if sig == "BUY":
-            if trend_up:
-                lines.append("✓ Trend up: price > 200DMA, 50DMA > 200DMA, 200DMA rising")
-            if np.isfinite(high20):
-                buffer_pct = float(RULES.get('buy', {}).get('buffer_pct', 0.0))
-                trig = high20 * (1.0 + buffer_pct)
-                lines.append(f"✓ Breakout: price {price:.2f} > 20D high trigger {trig:.2f}")
-            if np.isfinite(vol20) and vol20 > 0 and np.isfinite(vol):
-                vm = float(RULES.get('buy', {}).get('vol_mult', 1.0))
-                lines.append(f"✓ Volume: {vol/vol20:.2f}× (need ≥ {vm:.2f}×)")
-            if np.isfinite(rsi):
-                lines.append(f"✓ RSI: {rsi:.0f} within buy range")
-
-        elif sig in ("DCA_DIP", "DCA_RECLAIM"):
-            if np.isfinite(sma200) and sma200_slope > 0:
-                lines.append("✓ 200DMA rising (dip-buying only in uptrend)")
-            if np.isfinite(price) and np.isfinite(sma200):
-                prox = float(RULES['dca'].get('sma200_proximity', 0.04))
-                allow_below = float(RULES['dca'].get('allow_below_pct', 0.02))
-                lo = sma200 * (1.0 - allow_below)
-                hi = sma200 * (1.0 + prox)
-                lines.append(f"✓ Near 200DMA zone: {lo:.2f}–{hi:.2f}")
-            if np.isfinite(rsi):
-                lines.append(f"✓ RSI: {rsi:.0f} ≤ {float(RULES['dca'].get('rsi_max', 55)):.0f}")
-            if death_cross:
-                lines.append("✓ No death-cross: FAIL")
-            else:
-                lines.append("✓ No death-cross: PASS")
-
-            if sig == "DCA_RECLAIM":
-                if reclaim21:
-                    lines.append(f"✓ Reclaim: closed back above EMA21 ({ema21:.2f})")
-                if reclaim200:
-                    lines.append(f"✓ Reclaim: closed back above 200DMA ({sma200:.2f})")
-                if not (reclaim21 or reclaim200):
-                    lines.append("✓ Reclaim signal: (none) — check rules")
-            else:
-                lines.append("✓ Dip day (no reclaim confirmation today)")
-
-        elif sig == "TRIM":
-            lines.append("✓ Uptrend intact but extended (take partials / tighten stop)")
-
-        elif sig == "AVOID":
-            if np.isfinite(price) and np.isfinite(sma200) and (price < sma200) and (sma200_slope < 0):
-                lines.append("✓ Below falling 200DMA (stage-4)")
-            if death_cross:
-                lines.append("✓ Death cross (50DMA < 200DMA)")
-            if np.isfinite(price) and np.isfinite(sma200) and price < sma200:
-                lines.append("✓ Price below 200DMA")
-
-        elif sig == "HOLD":
-            if trend_up:
-                lines.append("✓ Trend up, but no breakout/dip signal today")
-            else:
-                lines.append("✓ Holding zone (trend not clearly broken)")
-
-        else:
-            lines.append("✓ No strong edge (base / early / mixed signals)")
-
-        # keep it short
-        return lines[:7]
-    except Exception:
-        return []
-
 def render_card(r, badge_type, curr):
     euphoria_cls = "euphoria-glow" if is_euphoria(r) else ""
     euphoria_tag = '<span class="badge" style="background:rgba(245,158,11,0.2);color:#fbbf24;margin-left:6px">Euphoria</span>' if is_euphoria(r) else ""
@@ -2967,7 +2585,7 @@ def render_card(r, badge_type, curr):
         s200 = r.get("SMA200", np.nan)
 
         chart_key = (
-            f"<div class=\"chart-key-wrap\"><div class=\"chart-key\">"
+            f"<div class=\"chart-key\">"
             f"<span class='key-item'><span class='sw sw-ema'></span>EMA21 <span class='mono'>{_fmt(ema)}</span></span>"
             f"<span class='key-item'><span class='sw sw-50'></span>SMA50<span class='note'>(dot)</span> <span class='mono'>{_fmt(s50)}</span></span>"
             f"<span class='key-item'><span class='sw sw-200'></span>200DMA <span class='mono'>{_fmt(s200)}</span></span>"
@@ -3019,16 +2637,10 @@ def render_card(r, badge_type, curr):
     vol20 = r.get("Vol20", np.nan)
     vol_ratio = (float(vol) / float(vol20)) if (vol is not None and vol20 not in (None, 0) and np.isfinite(float(vol)) and np.isfinite(float(vol20)) and float(vol20) != 0) else np.nan
 
-    
-    why_lines = why_fired(r)
-    why_html = ""
-    if why_lines:
-        items = "".join(f"<li>{w}</li>" for w in why_lines)
-        why_html = f"<div class='adv-row'><span class='adv-k'>Why</span><span class='adv-v'><ul class='why-list'>{items}</ul></span></div>"
     advanced_html = (
         "<details class='adv-details advanced-only'>"
         "<summary>Advanced</summary>"
-        "<div class='adv-grid'>" f"{why_html}"
+        "<div class='adv-grid'>"
         f"<div class='adv-row'><span class='adv-k'>Levels</span><span class='adv-v mono'>20D High {_p(hi20)} · 52W High {_p(hi52)} · 52W Low {_p(lo52)}</span></div>"
         f"<div class='adv-row'><span class='adv-k'>Volume</span><span class='adv-v mono'>Today {_n(vol/1e6,'M')} · Avg20 {_n(vol20/1e6,'M')} · Ratio {_n(vol_ratio,'x')}</span></div>"
         f"<div class='adv-row'><span class='adv-k'>Distances</span><span class='adv-v mono'>vs EMA21 {_n(r.get('Dist_EMA21_%', np.nan),'%')} · vs SMA50 {_n(r.get('Dist_SMA50_%', np.nan),'%')} · vs 200DMA {_n(r.get('Dist_to_SMA200_%', np.nan),'%')}</span></div>"
@@ -3060,7 +2672,7 @@ def render_card(r, badge_type, curr):
         <div class="comment-box">{r['Comment']}</div>
         <div class="playbook">{r['Playbook']}</div>
         {advanced_html}
-        <div class="chart-container">{r['_mini_candle']}{chart_key}<div class="rs-block advanced-only"><div class="rs-title">RS vs market (normalized)</div>{r.get('_rs_spark','')}</div></div>
+        <div class="chart-container">{r['_mini_candle']}{chart_key}</div>
     </div>
     """
 def render_kpi(label, val, color_cls):
@@ -3162,7 +2774,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
             {html_cards}
             
             <h2 id="{m_code}-degen" style="margin-top:40px">Degenerate Radar (Spec Only)</h2>
-            <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>Sig</th><th>Metric</th><th>Spark</th></tr></thead><tbody>{degen_rows}</tbody></table></div><div class='bt-note'>Note: This simulation uses the current watchlist (survivorship bias) and simplified assumptions. It is a historical sanity-check, not a prediction.</div></div>
+            <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Score</th><th>Sig</th><th>Metric</th><th>Spark</th></tr></thead><tbody>{degen_rows}</tbody></table></div></div>
             
             <h2 id="{m_code}-gate" style="margin-top:40px">Auto-DCA Candidates</h2>
             <div class="card"><div class="table-responsive"><table><thead><tr><th>Ticker</th><th>Gap %</th><th>Reclaim?</th><th>EMA21?</th><th>Fill %</th><th>Trend</th></tr></thead><tbody>{gate_rows}</tbody></table></div></div>
@@ -3183,7 +2795,7 @@ def render_market_html(m_code, m_conf, snaps_df, news_df):
     """
 
 if __name__ == "__main__":
-    print("Starting TraderBruh Global Hybrid v8.0")
+    print("Starting TraderBruh Global Hybrid v7.3...")
     market_htmls, tab_buttons = [], []
     
     # Force Sydney Time
@@ -3214,3 +2826,4 @@ if __name__ == "__main__":
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     with open(OUTPUT_HTML, "w", encoding="utf-8") as f: f.write(full)
     print("Done:", OUTPUT_HTML)
+
